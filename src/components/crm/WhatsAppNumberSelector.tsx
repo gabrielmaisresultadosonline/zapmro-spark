@@ -96,6 +96,7 @@ export function WhatsAppNumberSelector({
 
   const canConnectMore = numbers.length < maxNumbers;
 
+
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-[#0c1317] via-[#111b21] to-[#0c1317] p-4 sm:p-6">
       <div className="w-full max-w-xl bg-[#202c33] rounded-2xl shadow-2xl border border-white/5 p-6 sm:p-8">
