@@ -169,23 +169,60 @@ export function WhatsAppNumberSelector({
 
             <button
               type="button"
-              onClick={onConnectNew}
-              disabled={!canConnectMore}
+              onClick={() => {
+                if (canConnectMore) {
+                  onConnectNew();
+                  return;
+                }
+                setShowLimit(true);
+              }}
               className={cn(
                 "w-full h-12 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition",
                 canConnectMore
                   ? "bg-[#1877F2] hover:bg-[#1465c8] text-white"
-                  : "bg-white/5 text-white/30 cursor-not-allowed"
+                  : "bg-white/5 text-white/40 hover:bg-white/10"
               )}
             >
-              <Plus className="w-4 h-4" />
+              {canConnectMore ? <Plus className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
               {canConnectMore
                 ? "Conectar mais um WhatsApp"
-                : "Limite de números atingido — fale com o suporte"}
+                : "Cadastrar número (limite atingido)"}
             </button>
           </div>
         )}
       </div>
+
+      {showLimit && (
+        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-[#202c33] rounded-2xl border border-white/10 p-6 text-center">
+            <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center">
+              <Lock className="w-6 h-6 text-white/60" />
+            </div>
+            <h2 className="text-white font-bold text-lg mb-2">Limite do seu cadastro</h2>
+            <p className="text-white/60 text-sm mb-5">
+              Seu cadastro está disponível para {maxNumbers} número(s). Para liberar mais números,
+              entre em contato com nosso administrador.
+            </p>
+            <a
+              href={SUPPORT_WHATSAPP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full h-11 rounded-xl bg-[#00a884] hover:bg-[#02916f] text-white text-sm font-semibold flex items-center justify-center gap-2 transition"
+            >
+              <MessageSquare className="w-4 h-4" />
+              Falar no WhatsApp
+            </a>
+            <button
+              type="button"
+              onClick={() => setShowLimit(false)}
+              className="w-full h-10 mt-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-semibold"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
+
 
       {pinTarget && (
         <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4">
