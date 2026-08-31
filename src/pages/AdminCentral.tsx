@@ -801,7 +801,52 @@ export default function AdminCentral() {
     }
   }
 
+  function openLockDialog(u: AdminUser) {
+    setLockTarget(u);
+    setLockReason(u.access_lock_reason || "");
+  }
+
+  async function confirmLock() {
+    if (!lockTarget || lockSaving) return;
+    const reason = lockReason.trim();
+    if (!reason) {
+      toast.error("Informe o motivo do travamento");
+      return;
+    }
+    setLockSaving(true);
+    try {
+      await call("lock_user", { userId: lockTarget.id, reason });
+      setUsers((prev) =>
+        prev.map((x) =>
+          x.id === lockTarget.id
+            ? { ...x, access_locked: true, access_lock_reason: reason, access_locked_at: new Date().toISOString() }
+            : x
+        )
+      );
+      toast.success(`Acesso de ${lockTarget.email} travado`);
+      setLockTarget(null);
+    } catch (err: any) {
+      toast.error(err?.message || "Erro ao travar o acesso");
+    } finally {
+      setLockSaving(false);
+    }
+  }
+
+  async function handleUnlock(u: AdminUser) {
+    if (!confirm(`Destravar o acesso de ${u.email}?`)) return;
+    try {
+      await call("unlock_user", { userId: u.id });
+      setUsers((prev) =>
+        prev.map((x) => (x.id === u.id ? { ...x, access_locked: false, access_lock_reason: null, access_locked_at: null } : x))
+      );
+      toast.success("Acesso liberado");
+    } catch (err: any) {
+      toast.error(err?.message || "Erro ao destravar");
+    }
+  }
+
   async function handleDisconnect(u: AdminUser) {
+
     if (!confirm(`Desconectar WhatsApp de ${u.email}?`)) return;
     try {
       await call("disconnect_whatsapp", { userId: u.id });
