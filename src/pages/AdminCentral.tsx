@@ -102,7 +102,11 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
   // 1) Caminho rápido: fetch direto no endpoint das functions
   if (baseUrl) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
     try {
       const res = await fetch(`${baseUrl}/functions/v1/crm-central-admin`, {
         method: "POST",
@@ -120,11 +124,17 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
         throw new Error(text?.slice(0, 200) || `HTTP ${res.status}`);
       }
     } catch (fetchErr) {
+      // Se o próprio tempo limite estourou, tentar o SDK apenas duplicaria a
+      // espera (o usuário ficava "carregando" por 60s). Falhamos direto.
+      if (timedOut) {
+        throw new Error("Tempo esgotado ao contatar o servidor. Tente novamente.");
+      }
       console.warn("[AdminCentral] fetch direto falhou, tentando SDK:", fetchErr);
     } finally {
       clearTimeout(timer);
     }
   }
+
 
   // 2) Fallback: SDK do Supabase
   const { data, error } = await withTimeout(
