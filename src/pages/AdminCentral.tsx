@@ -1223,7 +1223,17 @@ export default function AdminCentral() {
                         <Power className="h-4 w-4 mr-1" /> Desconectar
                       </Button>
                     )}
+                    {u.access_locked ? (
+                      <Button size="sm" variant="outline" onClick={() => handleUnlock(u)} className="bg-white border-[#25D366]/40 text-[#128C7E] hover:bg-[#F0FDF4]">
+                        <Unlock className="h-4 w-4 mr-1" /> Destravar acesso
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" onClick={() => openLockDialog(u)} className="bg-white border-red-200 text-red-700 hover:bg-red-50">
+                        <Lock className="h-4 w-4 mr-1" /> Travar acesso
+                      </Button>
+                    )}
                     <Button size="sm" variant="destructive" onClick={() => handleDelete(u)}>
+
                       <Trash2 className="h-4 w-4 mr-1" /> Excluir
                     </Button>
                   </div>
