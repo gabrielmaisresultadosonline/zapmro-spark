@@ -160,43 +160,83 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
 }
 
 /**
- * O login usa uma função mínima para não precisar inicializar o módulo
- * administrativo completo. Em instalações ainda não atualizadas, mantém
- * compatibilidade usando a função antiga como fallback.
+ * Credenciais do Admin Central.
+ *
+ * Motivo desta abordagem: o login antes dependia de uma Edge Function remota.
+ * Quando essa função não estava publicada (ou demorava para "acordar"), o
+ * botão ficava carregando e terminava em "Tempo esgotado ao contatar o
+ * servidor" — sem nunca entrar. A verificação passa a ser local e instantânea.
+ *
+ * A senha não fica em texto puro no bundle: comparamos o digest SHA-256.
+ * Isso não é uma barreira criptográfica de verdade (nenhuma checagem no
+ * navegador é), mas o acesso real aos dados continua protegido no servidor:
+ * toda operação da tela reenvia as credenciais para a Edge Function, que as
+ * valida antes de tocar no banco. Ou seja, entrar na tela não dá acesso a
+ * nada por si só.
  */
-async function invokeAdminLogin(email: string, password: string) {
-  const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
-  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+const ADMIN_EMAIL_FALLBACK = "mro@gmail.com";
+const ADMIN_PASSWORD_SHA256_FALLBACK =
+  "e800958c05300aa6f60f0eff21813a641bfdf39dcd21fbbbd594e4fde8a1d344";
 
-  if (!baseUrl) {
-    return invokeAdminFn({ action: "login", adminEmail: email, adminPassword: password }, 12000);
+const ADMIN_EMAIL = (
+  (import.meta.env.VITE_ADMIN_CENTRAL_EMAIL as string | undefined) || ADMIN_EMAIL_FALLBACK
+)
+  .trim()
+  .toLowerCase();
+
+const ADMIN_PASSWORD_SHA256 = (
+  (import.meta.env.VITE_ADMIN_CENTRAL_PASSWORD_SHA256 as string | undefined) ||
+  ADMIN_PASSWORD_SHA256_FALLBACK
+)
+  .trim()
+  .toLowerCase();
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+type AdminLoginResult = { success: boolean; error?: string };
+
+/**
+ * Login local: nunca depende da rede, portanto nunca pode "esgotar o tempo".
+ */
+async function invokeAdminLogin(email: string, password: string): Promise<AdminLoginResult> {
+  const normalizedEmail = email.trim().toLowerCase();
+
+  if (!normalizedEmail || !password) {
+    return { success: false, error: "Informe e-mail e senha" };
   }
 
-  const controller = new AbortController();
-  const timer = window.setTimeout(() => controller.abort(), 12000);
+  if (normalizedEmail !== ADMIN_EMAIL) {
+    return { success: false, error: "Credenciais inválidas" };
+  }
+
   try {
-    const response = await fetch(`${baseUrl}/functions/v1/crm-central-admin-login`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(anonKey ? { apikey: anonKey, Authorization: `Bearer ${anonKey}` } : {}),
-      },
-      body: JSON.stringify({ adminEmail: email, adminPassword: password }),
-      signal: controller.signal,
-    });
-    const payload: unknown = await response.json();
-    if (response.status === 404 || response.status >= 500) {
-      throw new Error(`Login rápido indisponível (HTTP ${response.status})`);
+    const digest = await sha256Hex(password);
+    if (digest !== ADMIN_PASSWORD_SHA256) {
+      return { success: false, error: "Credenciais inválidas" };
     }
-    if (payload && typeof payload === "object") return payload;
-    throw new Error("Resposta inválida do servidor");
+    return { success: true };
   } catch (error) {
-    console.warn("[AdminCentral] login rápido indisponível, usando compatibilidade:", error);
-    return invokeAdminFn({ action: "login", adminEmail: email, adminPassword: password }, 12000);
-  } finally {
-    window.clearTimeout(timer);
+    // crypto.subtle exige contexto seguro (https ou localhost). Em HTTP puro
+    // ele não existe — nesse caso caímos para a validação no servidor em vez
+    // de bloquear o acesso do administrador.
+    console.warn("[AdminCentral] crypto.subtle indisponível, validando no servidor:", error);
+    try {
+      const data = await invokeAdminFn(
+        { action: "login", adminEmail: normalizedEmail, adminPassword: password },
+        12000
+      );
+      return { success: Boolean(data?.success), error: data?.error };
+    } catch (serverError: any) {
+      return { success: false, error: serverError?.message || "Falha no login" };
+    }
   }
 }
+
 
 
 
