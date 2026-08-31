@@ -105,7 +105,9 @@ export function WhatsAppNumberSelector({
           </div>
           <h1 className="text-xl sm:text-2xl font-bold text-white">Qual WhatsApp você quer abrir?</h1>
           <p className="text-white/50 text-sm mt-2">
-            Este cadastro tem {maxNumbers} número(s) liberado(s). Escolha um para entrar nas conversas.
+            {maxNumbers > 1
+              ? `Seu plano tem ${maxNumbers} números liberados. Escolha um para entrar nas conversas.`
+              : "Seu cadastro tem 1 número liberado. Escolha-o para entrar nas conversas."}
           </p>
         </div>
 
