@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Lock, Sparkles, Check, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import AccessLockOverlay from "@/components/crm/AccessLockOverlay";
+
 
 type Status =
   | { kind: "loading" }
