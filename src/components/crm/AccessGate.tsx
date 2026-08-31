@@ -266,7 +266,9 @@ export default function AccessGate({ children }: { children: React.ReactNode }) 
 
   return (
     <>
+      <AccessLockOverlay />
       {status.mode === "trial" && (
+
         <div className="fixed top-0 inset-x-0 z-50 bg-amber-500 text-white text-center text-sm font-semibold py-2 px-4 shadow">
           🎁 Teste grátis: {status.daysLeft} dia{status.daysLeft === 1 ? "" : "s"} restante{status.daysLeft === 1 ? "" : "s"} —{" "}
           <a href="/vendas#precos" className="underline">assine agora</a> para não perder o acesso.
