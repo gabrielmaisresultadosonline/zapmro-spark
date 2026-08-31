@@ -163,27 +163,24 @@ export default function MigrationExtras() {
 
     setBusy("secrets");
     try {
-      const { data, error } = await supabase.functions.invoke<{
-        success?: boolean;
-        content?: string;
-        found?: string[];
-        missing?: string[];
-        error?: string;
-      }>("export-secrets", { body: { adminEmail, adminPassword } });
+      // Função dedicada, mas com o mesmo contrato de tempo limite do restante do
+      // Admin Central: se não responder, o botão volta ao normal com o motivo.
+      const data = await adminCall<{ content?: string; found?: string[]; missing?: string[] }>(
+        "export",
+        { email: adminEmail, password: adminPassword },
+        {},
+        { fn: "export-secrets", timeoutMs: ADMIN_TIMEOUTS.write },
+      );
 
-      if (error) throw new Error(error.message);
-      if (!data?.success || !data.content) {
-        throw new Error(data?.error ?? "Falha ao exportar secrets");
-      }
+      if (!data.content) throw new Error("Falha ao exportar secrets");
 
       download(data.content, "secrets.env", "text/plain;charset=utf-8");
       toast.success(
         `${data.found?.length ?? 0} preenchidos · ${data.missing?.length ?? 0} para completar na VPS`,
       );
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Falha ao exportar secrets",
-      );
+      toast.error(adminErrorMessage(err, "Falha ao exportar secrets"));
+
     } finally {
       setBusy(null);
     }
