@@ -11,6 +11,13 @@ import {
   type WhatsAppNumberRecord,
 } from "@/lib/whatsappNumbers";
 
+/** Contato do administrador para liberação de números extras. */
+const SUPPORT_WHATSAPP_URL =
+  "https://wa.me/5551992835863?text=" +
+  encodeURIComponent(
+    "Vim pelo site, estou precisando cadastrar mais um numero no ZAPMRO OFICIAL"
+  );
+
 export interface WhatsAppNumberSelectorProps {
   userId: string;
   maxNumbers: number;
