@@ -688,6 +688,12 @@ export default function AdminCentral() {
   const [numbersLoading, setNumbersLoading] = useState(false);
   const [numbersSaving, setNumbersSaving] = useState(false);
 
+  // Travamento de acesso
+  const [lockTarget, setLockTarget] = useState<AdminUser | null>(null);
+  const [lockReason, setLockReason] = useState("");
+  const [lockSaving, setLockSaving] = useState(false);
+
+
   useEffect(() => {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     if (raw) {
