@@ -1332,7 +1332,60 @@ export default function AdminCentral() {
       </Dialog>
 
       {/* Password dialog */}
+      {/* Travar acesso do cadastro */}
+      <Dialog open={!!lockTarget} onOpenChange={(o) => !o && setLockTarget(null)}>
+        <DialogContent className="max-w-md bg-white border-[#E8F5F1] text-[#075E54]">
+          <DialogHeader>
+            <DialogTitle className="text-[#075E54] flex items-center gap-2">
+              <Lock className="h-4 w-4 text-red-600" /> Travar acesso
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="text-sm">
+              <div className="font-medium">{lockTarget?.full_name || lockTarget?.email}</div>
+              <div className="text-[#128C7E]/70">{lockTarget?.email}</div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[#075E54]">Motivo (aparece para o usuário)</Label>
+              <Textarea
+                value={lockReason}
+                onChange={(e) => setLockReason(e.target.value)}
+                placeholder="Ex.: pagamento"
+                maxLength={500}
+                className="bg-[#F0FDF4] border-[#E8F5F1] focus-visible:ring-[#25D366]"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {["Pagamento", "Uso indevido", "Pendência com a administração"].map((r) => (
+                <Button
+                  key={r}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setLockReason(r)}
+                  className="bg-white border-[#E8F5F1] text-[#075E54] hover:bg-[#F0FDF4]"
+                >
+                  {r}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-[#128C7E]/70">
+              O usuário verá um popup em tela cheia que não pode ser fechado até você destravar o acesso.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLockTarget(null)} className="bg-white border-[#E8F5F1] text-[#075E54]">
+              Cancelar
+            </Button>
+            <Button onClick={confirmLock} disabled={lockSaving} className="bg-red-600 hover:bg-red-700 text-white">
+              {lockSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Travar agora"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Multi WhatsApp: libera quantidade e senha por número */}
+
       <Dialog open={!!numbersTarget} onOpenChange={(o) => !o && setNumbersTarget(null)}>
         <DialogContent className="max-w-lg bg-white border-[#E8F5F1] text-[#075E54]">
           <DialogHeader>
