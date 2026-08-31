@@ -363,8 +363,9 @@ serve(async (req) => {
 
       const { data: profiles } = await supabase
         .from("crm_profiles")
-        .select("user_id, full_name, whatsapp_number, role, created_at")
+        .select("user_id, full_name, whatsapp_number, role, created_at, access_locked, access_lock_reason, access_locked_at")
         .in("user_id", userIds);
+
 
       const { data: settings } = await supabase
         .from("crm_settings")
@@ -388,11 +389,15 @@ serve(async (req) => {
           full_name: p.full_name || null,
           whatsapp_profile_number: p.whatsapp_number || null,
           role: p.role || "user",
+          access_locked: p.access_locked === true,
+          access_lock_reason: p.access_lock_reason || null,
+          access_locked_at: p.access_locked_at || null,
           meta_display_phone_number: s.meta_display_phone_number || null,
           meta_verified_name: s.meta_verified_name || null,
           meta_phone_number_id: s.meta_phone_number_id || null,
           connected,
         };
+
       });
 
       // Sort newest first
@@ -402,6 +407,39 @@ serve(async (req) => {
 
       return json({ success: true, users });
     }
+
+    // ===== Travar / destravar o acesso de um cadastro =====
+    if (action === "lock_user" || action === "unlock_user") {
+      const { userId, reason } = body as any;
+      if (typeof userId !== "string" || !userId) {
+        return json({ success: false, error: "userId obrigatório" });
+      }
+
+      const locking = action === "lock_user";
+      const cleanReason = typeof reason === "string" ? reason.trim().slice(0, 500) : "";
+
+      const payload = locking
+        ? {
+            access_locked: true,
+            access_lock_reason: cleanReason || "Pendência com a administração",
+            access_locked_at: new Date().toISOString(),
+          }
+        : { access_locked: false, access_lock_reason: null, access_locked_at: null };
+
+      const { error: lockError } = await supabase
+        .from("crm_profiles")
+        .update(payload)
+        .eq("user_id", userId);
+
+      if (lockError) {
+        console.error(`[${action}] falhou:`, lockError.message);
+        return json({ success: false, error: "Não foi possível atualizar o travamento" });
+      }
+
+      return json({ success: true, locked: locking });
+    }
+
+
 
     if (action === "user_insights") {
       const { userId } = body as any;

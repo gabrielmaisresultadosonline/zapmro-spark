@@ -40,7 +40,11 @@ import {
   ChevronUp,
   Copy,
   Shield,
+  Lock,
+  Unlock,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+
 
 type AdminUser = {
   id: string;
@@ -50,10 +54,14 @@ type AdminUser = {
   full_name: string | null;
   whatsapp_profile_number: string | null;
   role: string;
+  access_locked?: boolean;
+  access_lock_reason?: string | null;
+  access_locked_at?: string | null;
   meta_display_phone_number: string | null;
   meta_verified_name: string | null;
   meta_phone_number_id: string | null;
   connected: boolean;
+
 };
 
 type Insights = {
@@ -74,8 +82,10 @@ const STORAGE_KEY = "admincentral_creds_v1";
 
 /**
  * Chamada resiliente à Edge Function do admin.
+ * - Tenta primeiro o `fetch` direto (bem mais rápido que o SDK, que faz
+ *   pré-checagens de sessão e pode demorar vários segundos no login)
+ * - Cai para o SDK apenas se o fetch direto não estiver disponível/falhar
  * - Timeout explícito (evita o botão ficar "carregando" para sempre)
- * - Fallback via fetch direto caso o SDK trave/erro de rede
  */
 async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): Promise<any> {
   const withTimeout = <T,>(p: Promise<T>): Promise<T> =>
@@ -86,34 +96,11 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
       ),
     ]);
 
-  try {
-    const { data, error } = await withTimeout(
-      supabase.functions.invoke("crm-central-admin", { body }) as Promise<any>
-    );
-    if (error) {
-      // A SDK converte QUALQUER status !=2xx em "non-2xx status code" e esconde
-      // a mensagem real. Lemos o corpo da resposta para devolver o erro correto.
-      const ctx: any = (error as any)?.context;
-      if (ctx && typeof ctx.text === "function") {
-        try {
-          const raw = await ctx.text();
-          const parsed = JSON.parse(raw);
-          if (parsed && typeof parsed === "object") return parsed;
-        } catch {
-          /* segue para o fallback */
-        }
-      }
-      throw error;
-    }
-    if (data) return data;
-    throw new Error("Resposta vazia do servidor");
-  } catch (sdkErr) {
+  const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
+  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 
-    // Fallback: fetch direto no endpoint público das functions
-    const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
-    const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
-    if (!baseUrl) throw sdkErr;
-
+  // 1) Caminho rápido: fetch direto no endpoint das functions
+  if (baseUrl) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -132,11 +119,36 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
       } catch {
         throw new Error(text?.slice(0, 200) || `HTTP ${res.status}`);
       }
+    } catch (fetchErr) {
+      console.warn("[AdminCentral] fetch direto falhou, tentando SDK:", fetchErr);
     } finally {
       clearTimeout(timer);
     }
   }
+
+  // 2) Fallback: SDK do Supabase
+  const { data, error } = await withTimeout(
+    supabase.functions.invoke("crm-central-admin", { body }) as Promise<any>
+  );
+  if (error) {
+    // A SDK converte QUALQUER status !=2xx em "non-2xx status code" e esconde
+    // a mensagem real. Lemos o corpo da resposta para devolver o erro correto.
+    const ctx: any = (error as any)?.context;
+    if (ctx && typeof ctx.text === "function") {
+      try {
+        const raw = await ctx.text();
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch {
+        /* ignora */
+      }
+    }
+    throw error;
+  }
+  if (data) return data;
+  throw new Error("Resposta vazia do servidor");
 }
+
 
 
 function ReportStat({
@@ -676,6 +688,12 @@ export default function AdminCentral() {
   const [numbersLoading, setNumbersLoading] = useState(false);
   const [numbersSaving, setNumbersSaving] = useState(false);
 
+  // Travamento de acesso
+  const [lockTarget, setLockTarget] = useState<AdminUser | null>(null);
+  const [lockReason, setLockReason] = useState("");
+  const [lockSaving, setLockSaving] = useState(false);
+
+
   useEffect(() => {
     const raw = sessionStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -783,7 +801,52 @@ export default function AdminCentral() {
     }
   }
 
+  function openLockDialog(u: AdminUser) {
+    setLockTarget(u);
+    setLockReason(u.access_lock_reason || "");
+  }
+
+  async function confirmLock() {
+    if (!lockTarget || lockSaving) return;
+    const reason = lockReason.trim();
+    if (!reason) {
+      toast.error("Informe o motivo do travamento");
+      return;
+    }
+    setLockSaving(true);
+    try {
+      await call("lock_user", { userId: lockTarget.id, reason });
+      setUsers((prev) =>
+        prev.map((x) =>
+          x.id === lockTarget.id
+            ? { ...x, access_locked: true, access_lock_reason: reason, access_locked_at: new Date().toISOString() }
+            : x
+        )
+      );
+      toast.success(`Acesso de ${lockTarget.email} travado`);
+      setLockTarget(null);
+    } catch (err: any) {
+      toast.error(err?.message || "Erro ao travar o acesso");
+    } finally {
+      setLockSaving(false);
+    }
+  }
+
+  async function handleUnlock(u: AdminUser) {
+    if (!confirm(`Destravar o acesso de ${u.email}?`)) return;
+    try {
+      await call("unlock_user", { userId: u.id });
+      setUsers((prev) =>
+        prev.map((x) => (x.id === u.id ? { ...x, access_locked: false, access_lock_reason: null, access_locked_at: null } : x))
+      );
+      toast.success("Acesso liberado");
+    } catch (err: any) {
+      toast.error(err?.message || "Erro ao destravar");
+    }
+  }
+
   async function handleDisconnect(u: AdminUser) {
+
     if (!confirm(`Desconectar WhatsApp de ${u.email}?`)) return;
     try {
       await call("disconnect_whatsapp", { userId: u.id });
@@ -1112,6 +1175,13 @@ export default function AdminCentral() {
                         </Badge>
                       )}
                       {u.role === "super_admin" && <Badge className="bg-[#075E54] text-white hover:bg-[#075E54]">super_admin</Badge>}
+                      {u.access_locked && (
+                        <Badge className="bg-red-100 text-red-700 hover:bg-red-100 border border-red-200 gap-1">
+                          <Lock className="h-3 w-3" />
+                          Travado{u.access_lock_reason ? `: ${u.access_lock_reason}` : ""}
+                        </Badge>
+                      )}
+
                     </div>
                     <div className="text-sm text-[#128C7E]/80 flex items-center gap-1">
                       <Mail className="h-3.5 w-3.5" />
@@ -1153,7 +1223,17 @@ export default function AdminCentral() {
                         <Power className="h-4 w-4 mr-1" /> Desconectar
                       </Button>
                     )}
+                    {u.access_locked ? (
+                      <Button size="sm" variant="outline" onClick={() => handleUnlock(u)} className="bg-white border-[#25D366]/40 text-[#128C7E] hover:bg-[#F0FDF4]">
+                        <Unlock className="h-4 w-4 mr-1" /> Destravar acesso
+                      </Button>
+                    ) : (
+                      <Button size="sm" variant="outline" onClick={() => openLockDialog(u)} className="bg-white border-red-200 text-red-700 hover:bg-red-50">
+                        <Lock className="h-4 w-4 mr-1" /> Travar acesso
+                      </Button>
+                    )}
                     <Button size="sm" variant="destructive" onClick={() => handleDelete(u)}>
+
                       <Trash2 className="h-4 w-4 mr-1" /> Excluir
                     </Button>
                   </div>
@@ -1252,7 +1332,60 @@ export default function AdminCentral() {
       </Dialog>
 
       {/* Password dialog */}
+      {/* Travar acesso do cadastro */}
+      <Dialog open={!!lockTarget} onOpenChange={(o) => !o && setLockTarget(null)}>
+        <DialogContent className="max-w-md bg-white border-[#E8F5F1] text-[#075E54]">
+          <DialogHeader>
+            <DialogTitle className="text-[#075E54] flex items-center gap-2">
+              <Lock className="h-4 w-4 text-red-600" /> Travar acesso
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="text-sm">
+              <div className="font-medium">{lockTarget?.full_name || lockTarget?.email}</div>
+              <div className="text-[#128C7E]/70">{lockTarget?.email}</div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[#075E54]">Motivo (aparece para o usuário)</Label>
+              <Textarea
+                value={lockReason}
+                onChange={(e) => setLockReason(e.target.value)}
+                placeholder="Ex.: pagamento"
+                maxLength={500}
+                className="bg-[#F0FDF4] border-[#E8F5F1] focus-visible:ring-[#25D366]"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {["Pagamento", "Uso indevido", "Pendência com a administração"].map((r) => (
+                <Button
+                  key={r}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setLockReason(r)}
+                  className="bg-white border-[#E8F5F1] text-[#075E54] hover:bg-[#F0FDF4]"
+                >
+                  {r}
+                </Button>
+              ))}
+            </div>
+            <p className="text-xs text-[#128C7E]/70">
+              O usuário verá um popup em tela cheia que não pode ser fechado até você destravar o acesso.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setLockTarget(null)} className="bg-white border-[#E8F5F1] text-[#075E54]">
+              Cancelar
+            </Button>
+            <Button onClick={confirmLock} disabled={lockSaving} className="bg-red-600 hover:bg-red-700 text-white">
+              {lockSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : "Travar agora"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Multi WhatsApp: libera quantidade e senha por número */}
+
       <Dialog open={!!numbersTarget} onOpenChange={(o) => !o && setNumbersTarget(null)}>
         <DialogContent className="max-w-lg bg-white border-[#E8F5F1] text-[#075E54]">
           <DialogHeader>
