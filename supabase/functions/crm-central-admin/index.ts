@@ -645,17 +645,15 @@ serve(async (req) => {
         targetUser.user_metadata?.name ||
         (targetUser.email || "").split("@")[0];
 
-      try {
-        await sendCrmAccessReminderEmail({
+      // A senha já está trocada (parte crítica). O e-mail segue em segundo plano.
+      background("send_access_reminder", () =>
+        sendCrmAccessReminderEmail({
           to: targetUser.email,
           fullName,
           password: tempPwd,
-        });
-      } catch (e) {
-        console.error("[send_access_reminder] email error:", e);
-        return json({ success: false, error: "Falha ao enviar e-mail" }, 500);
-      }
-      return json({ success: true });
+        })
+      );
+      return json({ success: true, emailQueued: true });
     }
 
     if (action === "delete_user") {
@@ -887,36 +885,36 @@ serve(async (req) => {
         upd.amount = PLANS[plan].amount;
       }
       const { error } = await supabase.from("crm_sales_orders").update(upd).eq("id", id);
-      if (error) throw error;
-      // Buscar pedido atualizado e enviar email de boas-vindas
-      try {
-        const { data: order } = await supabase
-          .from("crm_sales_orders")
-          .select("email, full_name, plan_label, plan, amount")
-          .eq("id", id).maybeSingle();
-        if (order?.email) {
-          // Grant access on the CRM profile
-          try {
-            const days = PLANS[order.plan]?.days ?? 30;
-            await supabase.rpc("grant_crm_access", {
-              p_email: order.email,
-              p_plan: order.plan,
-              p_days: days,
-            });
-          } catch (e) {
-            console.error("[approve_sales_order] grant_crm_access error:", e);
-          }
-          await sendCrmSalesApprovedEmail({
+      if (error) return json({ success: false, error: `Falha ao aprovar o pedido: ${error.message}` });
+
+      // Liberação do acesso é crítica: fica no caminho da resposta.
+      const { data: order } = await supabase
+        .from("crm_sales_orders")
+        .select("email, full_name, plan_label, plan, amount")
+        .eq("id", id).maybeSingle();
+
+      let accessGranted = false;
+      if (order?.email) {
+        const days = PLANS[order.plan]?.days ?? 30;
+        const { error: grantErr } = await supabase.rpc("grant_crm_access", {
+          p_email: order.email,
+          p_plan: order.plan,
+          p_days: days,
+        });
+        if (grantErr) console.error("[approve_sales_order] grant_crm_access error:", grantErr);
+        else accessGranted = true;
+
+        // E-mail de boas-vindas em segundo plano: não atrasa a confirmação.
+        background("approve_sales_order", () =>
+          sendCrmSalesApprovedEmail({
             to: order.email,
             fullName: order.full_name,
             planLabel: order.plan_label || order.plan,
             amount: Number(order.amount) || 0,
-          });
-        }
-      } catch (e) {
-        console.error("[approve_sales_order] email error:", e);
+          })
+        );
       }
-      return json({ success: true });
+      return json({ success: true, status: "approved", accessGranted, emailQueued: !!order?.email });
     }
 
     if (action === "migrate_sales_order_plan") {
@@ -1099,8 +1097,10 @@ serve(async (req) => {
         console.error("[grant_access] lookup error:", e);
       }
 
-      try {
-        await sendCrmSalesApprovedEmail({
+      // Acesso já liberado no banco — o e-mail vai em segundo plano para que o
+      // painel confirme a liberação na hora.
+      background("grant_access", () =>
+        sendCrmSalesApprovedEmail({
           to: cleanEmailGrant,
           fullName: grantFullName,
           planLabel: PLANS[plan].label,
@@ -1108,11 +1108,15 @@ serve(async (req) => {
           days: d,
           accessUntil: grantAccessUntil,
           password: grantPassword,
-        });
-      } catch (e) {
-        console.error("[grant_access] email error:", e);
-      }
-      return json({ success: true });
+        })
+      );
+      return json({
+        success: true,
+        accessUntil: grantAccessUntil ?? null,
+        plan,
+        days: d,
+        emailQueued: true,
+      });
     }
 
     if (action === "cancel_access") {
