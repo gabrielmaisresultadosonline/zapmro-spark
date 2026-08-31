@@ -37,8 +37,9 @@ interface Trial {
 }
 
 interface Props {
-  creds: { email: string; password: string };
+  creds: AdminCreds;
 }
+
 
 const PLAN_OPTIONS = [
   { value: "mensal", label: "Mensal (30d)", days: 30 },
