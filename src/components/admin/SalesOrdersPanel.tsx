@@ -174,6 +174,7 @@ export default function SalesOrdersPanel({ creds }: { creds: AdminCreds }) {
                   onDelete={() => remove(o.id)}
                   onApprove={(plan) => approveManual(o.id, plan)}
                   onMigrate={(plan) => migratePlan(o.id, plan)}
+                  busy={busyId === o.id}
                 />
               ))
             )}
@@ -194,12 +195,14 @@ function StatBox({ label, value, color }: { label: string; value: number | strin
 }
 
 function OrderRow({
-  order, onDelete, onApprove, onMigrate,
+  order, onDelete, onApprove, onMigrate, busy,
 }: {
   order: Order;
   onDelete: () => void;
   onApprove: (plan?: string) => void;
   onMigrate: (plan: string) => void;
+  /** Ação em andamento neste pedido: evita clique duplo e mostra o progresso. */
+  busy: boolean;
 }) {
   const [planOverride, setPlanOverride] = useState<string>(order.plan);
   const created = new Date(order.created_at).toLocaleString("pt-BR");
@@ -246,12 +249,13 @@ function OrderRow({
               <Button
                 size="sm"
                 className="bg-green-600 hover:bg-green-700 text-white"
+                disabled={busy}
                 onClick={() => {
                   if (!confirm(`Aprovar manualmente como ${planOverride}?`)) return;
                   onApprove(planOverride !== order.plan ? planOverride : undefined);
                 }}
               >
-                <CheckCircle2 className="h-4 w-4 mr-1" /> Aprovar
+                {busy ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <CheckCircle2 className="h-4 w-4 mr-1" />} Aprovar
               </Button>
             </div>
           )}
@@ -270,7 +274,7 @@ function OrderRow({
               <Button
                 size="sm"
                 variant="outline"
-                disabled={planOverride === order.plan}
+                disabled={busy || planOverride === order.plan}
                 onClick={() => {
                   if (!confirm(`Migrar acesso para ${planOverride}?`)) return;
                   onMigrate(planOverride);
@@ -290,7 +294,7 @@ function OrderRow({
               </a>
             </>
           )}
-          <Button size="sm" variant="destructive" onClick={onDelete}><Trash2 className="h-4 w-4" /></Button>
+          <Button size="sm" variant="destructive" onClick={onDelete} disabled={busy}><Trash2 className="h-4 w-4" /></Button>
         </div>
       </div>
     </Card>
