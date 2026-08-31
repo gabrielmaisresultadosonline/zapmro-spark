@@ -32,65 +32,99 @@ type Order = {
   created_at: string;
 };
 
-export default function SalesOrdersPanel({ creds }: { creds: { email: string; password: string } }) {
+export default function SalesOrdersPanel({ creds }: { creds: AdminCreds }) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  const loadingRef = useRef(false);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
-  async function load() {
-    setLoading(true);
+  /** `silent` evita avisos repetidos na atualização automática de 15s. */
+  async function load(silent = false) {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    if (!silent) setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: { action: "list_sales_orders", adminEmail: creds.email, adminPassword: creds.password },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+      const data = await adminRead<{ orders?: Order[] }>("list_sales_orders", creds);
+      if (!mountedRef.current) return;
       setOrders(data.orders || []);
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao carregar vendas");
+    } catch (e) {
+      if (!mountedRef.current || silent) return;
+      toast.error(adminErrorMessage(e, "Erro ao carregar vendas"));
     } finally {
-      setLoading(false);
+      loadingRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
   }
 
   useEffect(() => { load(); /* eslint-disable-next-line */ }, []);
   useEffect(() => {
-    const i = setInterval(load, 15000);
+    const i = setInterval(() => load(true), 15000);
     return () => clearInterval(i);
     // eslint-disable-next-line
   }, []);
 
   async function remove(id: string) {
+    if (busyId) return;
     if (!confirm("Excluir este pedido?")) return;
+    setBusyId(id);
     try {
-      await supabase.functions.invoke("crm-central-admin", {
-        body: { action: "delete_sales_order", adminEmail: creds.email, adminPassword: creds.password, id },
-      });
+      await adminCall("delete_sales_order", creds, { id });
       setOrders((p) => p.filter((o) => o.id !== id));
-    } catch (e: any) { toast.error(e.message || "Erro"); }
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Exclusão não confirmada. Atualize a lista para verificar.");
+        void load(true);
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao excluir o pedido"));
+      }
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function approveManual(id: string, plan?: string) {
+    if (busyId) return;
+    setBusyId(id);
+    // Aprovar duas vezes não deve liberar dois períodos de acesso.
+    const requestId = newRequestId();
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: { action: "approve_sales_order", adminEmail: creds.email, adminPassword: creds.password, id, plan },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+      await adminCall("approve_sales_order", creds, { id, plan, requestId });
+      setOrders((p) =>
+        p.map((o) => (o.id === id ? { ...o, status: "approved", paid_at: o.paid_at ?? new Date().toISOString() } : o))
+      );
       toast.success("Pedido aprovado");
-      load();
-    } catch (e: any) { toast.error(e.message || "Erro"); }
+      void load(true);
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Aprovação não confirmada. Atualize a lista antes de repetir.");
+        void load(true);
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao aprovar o pedido"));
+      }
+    } finally {
+      setBusyId(null);
+    }
   }
 
   async function migratePlan(id: string, plan: string) {
+    if (busyId) return;
+    setBusyId(id);
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: { action: "migrate_sales_order_plan", adminEmail: creds.email, adminPassword: creds.password, id, plan },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+      await adminCall("migrate_sales_order_plan", creds, { id, plan });
       toast.success("Plano migrado");
-      load();
-    } catch (e: any) { toast.error(e.message || "Erro"); }
+      void load(true);
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Migração não confirmada. Atualize a lista para verificar.");
+        void load(true);
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao migrar o plano"));
+      }
+    } finally {
+      setBusyId(null);
+    }
   }
 
   const byStatus = (s: string) => orders.filter((o) => o.status === s);
@@ -99,6 +133,7 @@ export default function SalesOrdersPanel({ creds }: { creds: { email: string; pa
   const pending = byStatus("pending").length;
   const approved = byStatus("approved").length;
   const expired = byStatus("expired").length;
+
   const revenue = byStatus("approved").reduce((sum, o) => sum + Number(o.amount), 0);
 
   return (
