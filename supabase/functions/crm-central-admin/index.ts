@@ -1196,7 +1196,8 @@ serve(async (req) => {
         }
       }
 
-      try {
+      // Envio em segundo plano: o painel confirma o reenvio sem esperar o provedor.
+      background("resend_access_email", async () => {
         if (isPaid || order?.status === "approved") {
           await sendCrmSalesApprovedEmail({
             to: cleanEmail,
@@ -1222,11 +1223,8 @@ serve(async (req) => {
             amount: 0,
           });
         }
-      } catch (e: any) {
-        console.error("[resend_access_email] error:", e);
-        return json({ success: false, error: e?.message || "Falha ao enviar email" }, 500);
-      }
-      return json({ success: true });
+      });
+      return json({ success: true, emailQueued: true });
     }
 
     return json({ success: false, error: `Ação inválida: ${action}` });
