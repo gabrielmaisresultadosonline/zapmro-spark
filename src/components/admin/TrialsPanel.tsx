@@ -1,5 +1,13 @@
-import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useEffect, useRef, useState } from "react";
+import {
+  adminCall,
+  adminErrorMessage,
+  adminRead,
+  isUnconfirmed,
+  newRequestId,
+  type AdminCreds,
+} from "@/lib/adminCentralApi";
+
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,8 +37,9 @@ interface Trial {
 }
 
 interface Props {
-  creds: { email: string; password: string };
+  creds: AdminCreds;
 }
+
 
 const PLAN_OPTIONS = [
   { value: "mensal", label: "Mensal (30d)", days: 30 },
@@ -64,27 +73,38 @@ export default function TrialsPanel({ creds }: Props) {
   const [selectedPlan, setSelectedPlan] = useState<Record<string, string>>({});
   const [customDays, setCustomDays] = useState<Record<string, string>>({});
 
-  const load = async () => {
-    setLoading(true);
+  const mountedRef = useRef(true);
+  const loadingRef = useRef(false);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  /**
+   * `silent` é usado pela atualização automática: se a rede falhar de fundo, não
+   * enche a tela de avisos — e o loader sempre termina.
+   */
+  const load = async (silent = false) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    if (!silent) setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: { action: "list_trials", adminEmail: creds.email, adminPassword: creds.password },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro ao carregar");
+      const data = await adminRead<{ trials?: Trial[] }>("list_trials", creds);
+      if (!mountedRef.current) return;
       setTrials(data.trials || []);
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao carregar cadastros");
+    } catch (e) {
+      if (!mountedRef.current || silent) return;
+      toast.error(adminErrorMessage(e, "Erro ao carregar cadastros"));
     } finally {
-      setLoading(false);
+      loadingRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     load();
-    const iv = setInterval(load, 60000);
+    const iv = setInterval(() => load(true), 60000);
     return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   const approve = async (t: Trial) => {
     const plan = selectedPlan[t.id] || "mensal";
@@ -104,50 +124,68 @@ export default function TrialsPanel({ creds }: Props) {
       if (!confirm(`Liberar ${plan.toUpperCase()} para ${t.email}?\n\nSerá enviado um email de liberação com email e uma NOVA senha de acesso.`)) return;
     }
     setBusyId(t.id);
+    // requestId estável: se o navegador desistir da resposta, repetir a ação
+    // não gera dois planos nem duas senhas novas.
+    const requestId = newRequestId();
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: {
-          action: "grant_access",
+      const data = await adminCall<{ accessUntil?: string; emailQueued?: boolean }>(
+        "grant_access",
+        creds,
+        {
           email: t.email,
           plan: planToSend,
           days,
           // envia junto no email de liberação uma senha nova de acesso
           resetPassword: true,
-          adminEmail: creds.email,
-          adminPassword: creds.password,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+          requestId,
+        }
+      );
+      // Aplica o resultado na hora: a lista não espera a releitura para mostrar
+      // que o plano entrou.
+      setTrials((prev) =>
+        prev.map((x) =>
+          x.id === t.id
+            ? {
+                ...x,
+                is_paid: true,
+                plan: plan === "custom" ? x.plan : planToSend,
+                access_until: data.accessUntil ?? x.access_until,
+                status: "paid",
+              }
+            : x
+        )
+      );
       toast.success(
         plan === "custom"
           ? `Acesso liberado por ${days} dia(s) para ${t.email}`
           : `Acesso liberado (${plan}) para ${t.email}`
       );
-      await load();
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao liberar acesso");
+      void load(true);
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Liberação não confirmada. Atualize a lista para verificar antes de repetir.");
+        void load(true);
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao liberar acesso"));
+      }
     } finally {
       setBusyId(null);
     }
   };
 
   const resendEmail = async (t: Trial) => {
+    if (resendId) return;
     setResendId(t.id);
+    const requestId = newRequestId();
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: {
-          action: "resend_access_email",
-          email: t.email,
-          adminEmail: creds.email,
-          adminPassword: creds.password,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+      await adminCall("resend_access_email", creds, { email: t.email, requestId });
       toast.success(`Email reenviado para ${t.email}`);
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao reenviar email");
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Reenvio não confirmado. Verifique a caixa do cliente antes de repetir.");
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao reenviar email"));
+      }
     } finally {
       setResendId(null);
     }
@@ -162,22 +200,22 @@ export default function TrialsPanel({ creds }: Props) {
       return;
     setCancelId(t.id);
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: {
-          action: "cancel_access",
-          email: t.email,
-          adminEmail: creds.email,
-          adminPassword: creds.password,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+      await adminCall("cancel_access", creds, { email: t.email });
+      setTrials((prev) =>
+        prev.map((x) => (x.id === t.id ? { ...x, is_paid: false, status: "trial_expired", hours_left: 0 } : x))
+      );
       toast.success(`Plano cancelado — ${t.email} está travado até pagar novamente`);
-      await load();
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao cancelar plano");
+      void load(true);
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Cancelamento não confirmado. Atualize a lista para verificar.");
+        void load(true);
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao cancelar plano"));
+      }
     } finally {
       setCancelId(null);
+
     }
   };
 
@@ -231,7 +269,7 @@ export default function TrialsPanel({ creds }: Props) {
             onChange={(e) => setSearch(e.target.value)}
             className="w-64"
           />
-          <Button size="sm" variant="outline" onClick={load} disabled={loading}>
+          <Button size="sm" variant="outline" onClick={() => load()} disabled={loading}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           </Button>
         </div>

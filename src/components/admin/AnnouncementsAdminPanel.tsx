@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import {
+  adminCall,
+  adminErrorMessage,
+  adminRead,
+  isUnconfirmed,
+  type AdminCreds,
+} from "@/lib/adminCentralApi";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +28,7 @@ type Ann = {
   created_at: string;
 };
 
-export default function AnnouncementsAdminPanel({ creds }: { creds: { email: string; password: string } }) {
+export default function AnnouncementsAdminPanel({ creds }: { creds: AdminCreds }) {
   const [items, setItems] = useState<Ann[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -32,22 +38,18 @@ export default function AnnouncementsAdminPanel({ creds }: { creds: { email: str
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
 
+  /** Toda chamada tem tempo limite próprio — nada fica girando sem resposta. */
   async function call(action: string, extra: Record<string, any> = {}) {
-    const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-      body: { action, adminEmail: creds.email, adminPassword: creds.password, ...extra },
-    });
-    if (error) throw error;
-    if (!data?.success) throw new Error(data?.error || "Erro");
-    return data;
+    return adminCall<any>(action, creds, extra);
   }
 
   async function load() {
     setLoading(true);
     try {
-      const data = await call("list_announcements");
+      const data = await adminRead<{ announcements?: Ann[] }>("list_announcements", creds);
       setItems(data.announcements || []);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao carregar avisos");
+    } catch (err) {
+      toast.error(adminErrorMessage(err, "Erro ao carregar avisos"));
     } finally {
       setLoading(false);
     }
@@ -73,8 +75,13 @@ export default function AnnouncementsAdminPanel({ creds }: { creds: { email: str
       toast.success("Aviso publicado");
       setTitle(""); setMessage(""); setStartDate(""); setEndDate(""); setFrequency("once");
       load();
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao salvar");
+    } catch (err) {
+      if (isUnconfirmed(err)) {
+        toast.error("Publicação não confirmada. Recarregue a lista antes de tentar de novo.");
+        load();
+      } else {
+        toast.error(adminErrorMessage(err, "Erro ao salvar o aviso"));
+      }
     } finally {
       setSaving(false);
     }
@@ -84,8 +91,8 @@ export default function AnnouncementsAdminPanel({ creds }: { creds: { email: str
     try {
       await call("update_announcement", { id: a.id, active: !a.active });
       setItems((p) => p.map((x) => x.id === a.id ? { ...x, active: !a.active } : x));
-    } catch (err: any) {
-      toast.error(err.message || "Erro");
+    } catch (err) {
+      toast.error(adminErrorMessage(err, "Erro ao atualizar o aviso"));
     }
   }
 
@@ -95,8 +102,8 @@ export default function AnnouncementsAdminPanel({ creds }: { creds: { email: str
       await call("delete_announcement", { id: a.id });
       toast.success("Excluído");
       setItems((p) => p.filter((x) => x.id !== a.id));
-    } catch (err: any) {
-      toast.error(err.message || "Erro");
+    } catch (err) {
+      toast.error(adminErrorMessage(err, "Erro ao excluir o aviso"));
     }
   }
 

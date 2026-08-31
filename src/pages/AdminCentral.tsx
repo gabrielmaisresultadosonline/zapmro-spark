@@ -1,6 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import JSZip from "jszip";
-import { supabase } from "@/integrations/supabase/client";
+import {
+  ADMIN_TIMEOUTS,
+  adminCall,
+  adminErrorMessage,
+  adminRead,
+  isUnconfirmed,
+  newRequestId,
+  type AdminCreds,
+} from "@/lib/adminCentralApi";
+
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -81,98 +90,20 @@ type DumpProgress = {
 const STORAGE_KEY = "admincentral_creds_v1";
 
 /**
- * Chamada resiliente à Edge Function do admin.
- * - Tenta primeiro o `fetch` direto (bem mais rápido que o SDK, que faz
- *   pré-checagens de sessão e pode demorar vários segundos no login)
- * - Cai para o SDK apenas se o fetch direto não estiver disponível/falhar
- * - Timeout explícito (evita o botão ficar "carregando" para sempre)
+ * Todas as operações passam pelo cliente único (`@/lib/adminCentralApi`), que
+ * garante tempo limite, cancelamento e mensagem de erro acionável. Antes cada
+ * painel chamava a função sem limite próprio e o botão girava para sempre.
  */
-async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): Promise<any> {
-  const withTimeout = <T,>(p: Promise<T>): Promise<T> =>
-    Promise.race([
-      p,
-      new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error("Tempo esgotado ao contatar o servidor. Tente novamente.")), timeoutMs)
-      ),
-    ]);
-
-  const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
-  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
-
-  // 1) Caminho rápido: fetch direto no endpoint das functions
-  if (baseUrl) {
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
-    try {
-      const res = await fetch(`${baseUrl}/functions/v1/crm-central-admin`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(anonKey ? { apikey: anonKey, Authorization: `Bearer ${anonKey}` } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const text = await res.text();
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error(text?.slice(0, 200) || `HTTP ${res.status}`);
-      }
-    } catch (fetchErr) {
-      // Se o próprio tempo limite estourou, tentar o SDK apenas duplicaria a
-      // espera (o usuário ficava "carregando" por 60s). Falhamos direto.
-      if (timedOut) {
-        throw new Error("Tempo esgotado ao contatar o servidor. Tente novamente.");
-      }
-      console.warn("[AdminCentral] fetch direto falhou, tentando SDK:", fetchErr);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
 
 
-  // 2) Fallback: SDK do Supabase
-  const { data, error } = await withTimeout(
-    supabase.functions.invoke("crm-central-admin", { body }) as Promise<any>
-  );
-  if (error) {
-    // A SDK converte QUALQUER status !=2xx em "non-2xx status code" e esconde
-    // a mensagem real. Lemos o corpo da resposta para devolver o erro correto.
-    const ctx: any = (error as any)?.context;
-    if (ctx && typeof ctx.text === "function") {
-      try {
-        const raw = await ctx.text();
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") return parsed;
-      } catch {
-        /* ignora */
-      }
-    }
-    throw error;
-  }
-  if (data) return data;
-  throw new Error("Resposta vazia do servidor");
-}
 
 /**
  * Credenciais do Admin Central.
  *
- * Motivo desta abordagem: o login antes dependia de uma Edge Function remota.
- * Quando essa função não estava publicada (ou demorava para "acordar"), o
- * botão ficava carregando e terminava em "Tempo esgotado ao contatar o
- * servidor" — sem nunca entrar. A verificação passa a ser local e instantânea.
- *
- * A senha não fica em texto puro no bundle: comparamos o digest SHA-256.
- * Isso não é uma barreira criptográfica de verdade (nenhuma checagem no
- * navegador é), mas o acesso real aos dados continua protegido no servidor:
- * toda operação da tela reenvia as credenciais para a Edge Function, que as
- * valida antes de tocar no banco. Ou seja, entrar na tela não dá acesso a
- * nada por si só.
+ * O login é validado localmente (SHA-256) para nunca depender de uma Edge
+ * Function remota — era isso que causava o carregamento infinito. O acesso real
+ * aos dados continua protegido no servidor: toda ação reenvia as credenciais
+ * para a função, que valida antes de tocar no banco.
  */
 const ADMIN_EMAIL_FALLBACK = "mro@gmail.com";
 const ADMIN_PASSWORD_SHA256_FALLBACK =
@@ -222,20 +153,22 @@ async function invokeAdminLogin(email: string, password: string): Promise<AdminL
     return { success: true };
   } catch (error) {
     // crypto.subtle exige contexto seguro (https ou localhost). Em HTTP puro
-    // ele não existe — nesse caso caímos para a validação no servidor em vez
-    // de bloquear o acesso do administrador.
+    // ele não existe — nesse caso validamos no servidor (função leve dedicada).
     console.warn("[AdminCentral] crypto.subtle indisponível, validando no servidor:", error);
     try {
-      const data = await invokeAdminFn(
-        { action: "login", adminEmail: normalizedEmail, adminPassword: password },
-        12000
+      const data = await adminCall(
+        "login",
+        { email: normalizedEmail, password },
+        {},
+        { fn: "crm-central-admin-login", timeoutMs: 10000 }
       );
       return { success: Boolean(data?.success), error: data?.error };
-    } catch (serverError: any) {
-      return { success: false, error: serverError?.message || "Falha no login" };
+    } catch (serverError) {
+      return { success: false, error: adminErrorMessage(serverError, "Falha no login") };
     }
   }
 }
+
 
 
 
@@ -285,7 +218,7 @@ function ReportStat({
  */
 type DumpFile = { name: string; content: string };
 
-function MigrationPanel({ creds }: { creds: { email: string; password: string } }) {
+function MigrationPanel({ creds }: { creds: AdminCreds }) {
   const [dumping, setDumping] = useState(false);
   const [progress, setProgress] = useState<DumpProgress | null>(null);
   const [dumpResult, setDumpResult] = useState<{
@@ -305,14 +238,15 @@ function MigrationPanel({ creds }: { creds: { email: string; password: string } 
     setDumpResult(null);
     setProgress({ phase: "Conectando...", current: 0, total: 100, detail: "" });
 
+    // Exportação tem orçamento de tempo próprio (mais longo), mas ainda finito:
+    // se um bloco travar, a tela informa o erro em vez de ficar carregando.
     const call = async (payload: Record<string, unknown>) => {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: { ...payload, adminEmail: creds.email, adminPassword: creds.password },
-      });
-      if (error) throw new Error(error.message || "Falha na comunicação com o servidor");
-      if (!data?.success) throw new Error(data?.error || "Erro ao gerar dump");
-      return data as any;
+      const { action, ...extra } = payload as any;
+      return (await adminCall(String(action), creds, extra, {
+        timeoutMs: ADMIN_TIMEOUTS.export,
+      })) as any;
     };
+
 
     try {
       setProgress({ phase: "Mapeando estrutura...", current: 5, total: 100, detail: "Tabelas, funções, RLS" });
@@ -458,8 +392,9 @@ function MigrationPanel({ creds }: { creds: { email: string; password: string } 
       });
 
       toast.success("Dump completo gerado com sucesso!");
-    } catch (err: any) {
-      toast.error(err.message || "Falha ao exportar dump");
+    } catch (err) {
+      toast.error(adminErrorMessage(err, "Falha ao exportar dump"));
+
     } finally {
       setDumping(false);
       setProgress(null);
@@ -750,7 +685,7 @@ cd /var/www/ia-mro && ./deploy/atualizar.sh`}
 }
 
 export default function AdminCentral() {
-  const [creds, setCreds] = useState<{ email: string; password: string } | null>(null);
+  const [creds, setCreds] = useState<AdminCreds | null>(null);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPwd, setLoginPwd] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
@@ -782,6 +717,25 @@ export default function AdminCentral() {
   const [lockReason, setLockReason] = useState("");
   const [lockSaving, setLockSaving] = useState(false);
 
+  /**
+   * Estado de ocupado por (usuário + ação). Antes um único booleano travava
+   * botões demais — ou nenhum — e nada garantia o fim do carregamento.
+   */
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  const busyKey = (userId: string, action: string) => `${userId}:${action}`;
+  const isBusy = (userId: string, action: string) => busy[busyKey(userId, action)] === true;
+  const setBusyFlag = (userId: string, action: string, value: boolean) =>
+    setBusy((prev) => {
+      const next = { ...prev };
+      if (value) next[busyKey(userId, action)] = true;
+      else delete next[busyKey(userId, action)];
+      return next;
+    });
+
+  /** Evita que "Recarregar" (manual ou automático) rode duas vezes ao mesmo tempo. */
+  const loadingRef = useRef(false);
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   useEffect(() => {
     const raw = sessionStorage.getItem(STORAGE_KEY);
@@ -797,16 +751,19 @@ export default function AdminCentral() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [creds]);
 
-  async function call(action: string, extra: Record<string, any> = {}) {
-    if (!creds) throw new Error("no creds");
-    const data = await invokeAdminFn({
-      action,
-      adminEmail: creds.email,
-      adminPassword: creds.password,
-      ...extra,
-    });
-    if (!data?.success) throw new Error(data?.error || "Erro");
-    return data;
+  async function call(action: string, extra: Record<string, any> = {}, timeoutMs?: number) {
+    if (!creds) throw new Error("Sessão do Admin Central encerrada. Entre novamente.");
+    return adminCall(action, creds, extra, timeoutMs ? { timeoutMs } : undefined);
+  }
+
+  /** Erro de credencial derruba a sessão; o resto só informa. */
+  function reportError(err: unknown, fallback: string) {
+    if ((err as any)?.kind === "unauthorized") {
+      toast.error(adminErrorMessage(err, fallback));
+      logout();
+      return;
+    }
+    toast.error(adminErrorMessage(err, fallback));
   }
 
   async function handleLogin(e: React.FormEvent) {
@@ -826,9 +783,8 @@ export default function AdminCentral() {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(c));
       setCreds(c);
       toast.success("Bem-vindo ao Admin Central");
-    } catch (err: any) {
-      toast.error(err?.message || "Falha no login");
-
+    } catch (err) {
+      toast.error(adminErrorMessage(err, "Falha no login"));
     } finally {
       setLoggingIn(false);
     }
@@ -839,28 +795,38 @@ export default function AdminCentral() {
     setCreds(null);
     setUsers([]);
     setSelected(null);
+    setBusy({});
   }
 
-  async function loadUsers(attempt = 0) {
+  /**
+   * Leitura da lista. Uma única repetição curta para falha de rede — nunca uma
+   * cadeia de tentativas que mantém o loader girando indefinidamente.
+   */
+  async function loadUsers(attempt = 0): Promise<void> {
+    if (!creds) return;
+    if (loadingRef.current && attempt === 0) return;
+    loadingRef.current = true;
     setLoading(true);
     try {
-      const data = await call("list_users");
+      const data = await adminRead<{ users?: AdminUser[] }>("list_users", creds);
+      if (!mountedRef.current) return;
       setUsers(data.users || []);
-    } catch (err: any) {
-      const message = String(err?.message || "");
-      if (message.includes("Credenciais")) {
-        toast.error(message);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      if ((err as any)?.kind === "unauthorized") {
+        toast.error(adminErrorMessage(err));
         logout();
         return;
       }
-      if (attempt < 3) {
-        const delay = 1500 * (attempt + 1);
-        setTimeout(() => loadUsers(attempt + 1), delay);
-        return;
+      if (attempt === 0 && isUnconfirmed(err)) {
+        loadingRef.current = false;
+        await new Promise((r) => setTimeout(r, 1500));
+        return loadUsers(1);
       }
-      toast.error(message || "Erro ao carregar usuários");
+      toast.error(adminErrorMessage(err, "Erro ao carregar usuários"));
     } finally {
-      setLoading(false);
+      loadingRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
   }
 
@@ -869,24 +835,35 @@ export default function AdminCentral() {
     setInsights(null);
     setLoadingInsights(true);
     try {
-      const data = await call("user_insights", { userId: u.id });
+      const data = await adminRead<{ insights: Insights }>("user_insights", creds!, { userId: u.id });
       setInsights(data.insights);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao carregar insights");
+    } catch (err) {
+      reportError(err, "Erro ao carregar insights");
     } finally {
       setLoadingInsights(false);
     }
   }
 
   async function handleDelete(u: AdminUser) {
+    if (isBusy(u.id, "delete")) return;
     if (!confirm(`Excluir definitivamente ${u.email}? Esta ação remove o cadastro, contatos e mensagens.`)) return;
+    // requestId fixo: repetir a exclusão após timeout não duplica efeitos.
+    const requestId = newRequestId();
+    setBusyFlag(u.id, "delete", true);
     try {
-      await call("delete_user", { userId: u.id });
+      await adminCall("delete_user", creds!, { userId: u.id, requestId });
       toast.success("Usuário excluído");
       setUsers((prev) => prev.filter((x) => x.id !== u.id));
       if (selected?.id === u.id) setSelected(null);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao excluir");
+    } catch (err) {
+      if (isUnconfirmed(err)) {
+        toast.error("Exclusão não confirmada. Use 'Recarregar' para verificar antes de tentar de novo.");
+        void loadUsers();
+      } else {
+        reportError(err, "Erro ao excluir");
+      }
+    } finally {
+      setBusyFlag(u.id, "delete", false);
     }
   }
 
@@ -902,71 +879,125 @@ export default function AdminCentral() {
       toast.error("Informe o motivo do travamento");
       return;
     }
+    const target = lockTarget;
     setLockSaving(true);
     try {
-      await call("lock_user", { userId: lockTarget.id, reason });
+      const data = await adminCall<{ locked?: boolean }>("lock_user", creds!, {
+        userId: target.id,
+        reason,
+      });
+      if (data.locked === false) throw new Error("O servidor não confirmou o travamento");
       setUsers((prev) =>
         prev.map((x) =>
-          x.id === lockTarget.id
+          x.id === target.id
             ? { ...x, access_locked: true, access_lock_reason: reason, access_locked_at: new Date().toISOString() }
             : x
         )
       );
-      toast.success(`Acesso de ${lockTarget.email} travado`);
+      toast.success(`Acesso de ${target.email} travado`);
       setLockTarget(null);
-    } catch (err: any) {
-      toast.error(err?.message || "Erro ao travar o acesso");
+    } catch (err) {
+      if (isUnconfirmed(err)) {
+        toast.error("Travamento não confirmado. Recarregando a lista para verificar.");
+        void loadUsers();
+      } else {
+        reportError(err, "Erro ao travar o acesso");
+      }
     } finally {
       setLockSaving(false);
     }
   }
 
   async function handleUnlock(u: AdminUser) {
+    if (isBusy(u.id, "unlock")) return;
     if (!confirm(`Destravar o acesso de ${u.email}?`)) return;
+    setBusyFlag(u.id, "unlock", true);
     try {
-      await call("unlock_user", { userId: u.id });
+      await adminCall("unlock_user", creds!, { userId: u.id });
       setUsers((prev) =>
         prev.map((x) => (x.id === u.id ? { ...x, access_locked: false, access_lock_reason: null, access_locked_at: null } : x))
       );
       toast.success("Acesso liberado");
-    } catch (err: any) {
-      toast.error(err?.message || "Erro ao destravar");
+    } catch (err) {
+      if (isUnconfirmed(err)) {
+        toast.error("Destravamento não confirmado. Recarregando a lista para verificar.");
+        void loadUsers();
+      } else {
+        reportError(err, "Erro ao destravar");
+      }
+    } finally {
+      setBusyFlag(u.id, "unlock", false);
     }
   }
 
   async function handleDisconnect(u: AdminUser) {
-
+    if (isBusy(u.id, "disconnect")) return;
     if (!confirm(`Desconectar WhatsApp de ${u.email}?`)) return;
+    setBusyFlag(u.id, "disconnect", true);
     try {
-      await call("disconnect_whatsapp", { userId: u.id });
+      await adminCall("disconnect_whatsapp", creds!, { userId: u.id });
       toast.success("WhatsApp desconectado");
-      loadUsers();
-    } catch (err: any) {
-      toast.error(err.message || "Erro");
+      setUsers((prev) =>
+        prev.map((x) =>
+          x.id === u.id
+            ? { ...x, connected: false, meta_display_phone_number: null, meta_phone_number_id: null, meta_verified_name: null }
+            : x
+        )
+      );
+    } catch (err) {
+      if (isUnconfirmed(err)) {
+        toast.error("Desconexão não confirmada. Recarregando a lista para verificar.");
+        void loadUsers();
+      } else {
+        reportError(err, "Erro ao desconectar");
+      }
+    } finally {
+      setBusyFlag(u.id, "disconnect", false);
     }
   }
 
   async function handleImpersonate(u: AdminUser) {
+    if (isBusy(u.id, "impersonate")) return;
+    setBusyFlag(u.id, "impersonate", true);
     const tab = window.open("", "_blank");
     try {
-      const data = await call("impersonate", { userId: u.id });
+      const data = await adminCall<{ url?: string }>("impersonate", creds!, { userId: u.id });
       if (!data?.url) throw new Error("Não foi possível gerar o acesso");
       if (tab) tab.location.href = data.url;
       else window.open(data.url, "_blank", "noopener,noreferrer");
       toast.success(`Abrindo WhatsApp de ${u.email}`);
-    } catch (err: any) {
+    } catch (err) {
       tab?.close();
-      toast.error(err.message || "Erro ao acessar WhatsApp do usuário");
+      reportError(err, "Erro ao acessar WhatsApp do usuário");
+    } finally {
+      setBusyFlag(u.id, "impersonate", false);
     }
   }
 
   async function handleSendReset(u: AdminUser) {
+    if (isBusy(u.id, "reminder")) return;
     if (!confirm(`Enviar lembrete de acesso para ${u.email}?\n\nSerá gerada uma nova senha temporária e enviada por e-mail junto com o link de acesso.`)) return;
+    const requestId = newRequestId();
+    setBusyFlag(u.id, "reminder", true);
     try {
-      await call("send_access_reminder", { userId: u.id, email: u.email });
-      toast.success("Lembrete de acesso enviado por e-mail");
-    } catch (err: any) {
-      toast.error(err.message || "Erro");
+      const data = await adminCall<{ emailQueued?: boolean }>("send_access_reminder", creds!, {
+        userId: u.id,
+        email: u.email,
+        requestId,
+      });
+      toast.success(
+        data.emailQueued
+          ? "Nova senha aplicada — o e-mail está na fila de envio"
+          : "Lembrete de acesso enviado por e-mail"
+      );
+    } catch (err) {
+      if (isUnconfirmed(err)) {
+        toast.error("Envio não confirmado. Verifique antes de repetir para não gerar outra senha.");
+      } else {
+        reportError(err, "Erro ao enviar o lembrete");
+      }
+    } finally {
+      setBusyFlag(u.id, "reminder", false);
     }
   }
 
@@ -976,52 +1007,62 @@ export default function AdminCentral() {
     setNumbersMax(1);
     setNumbersLoading(true);
     try {
-      const data = await call("list_user_numbers", { userId: u.id });
+      const data = await adminRead<{ maxNumbers?: number; numbers?: any[] }>(
+        "list_user_numbers",
+        creds!,
+        { userId: u.id }
+      );
       setNumbersMax(Number(data.maxNumbers) || 1);
       setNumbersList(data.numbers || []);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao carregar números");
+    } catch (err) {
+      reportError(err, "Erro ao carregar números");
     } finally {
       setNumbersLoading(false);
     }
   }
 
   async function saveMaxNumbers(value: number) {
-    if (!numbersTarget) return;
+    if (!numbersTarget || numbersSaving) return;
     setNumbersSaving(true);
     try {
-      await call("set_max_numbers", { userId: numbersTarget.id, maxNumbers: value });
-      setNumbersMax(value);
-      toast.success(`Cadastro liberado para ${value} número(s) de WhatsApp`);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao salvar");
+      const data = await adminCall<{ maxNumbers?: number }>("set_max_numbers", creds!, {
+        userId: numbersTarget.id,
+        maxNumbers: value,
+      });
+      const confirmed = Number(data.maxNumbers) || value;
+      setNumbersMax(confirmed);
+      toast.success(`Cadastro liberado para ${confirmed} número(s) de WhatsApp`);
+    } catch (err) {
+      reportError(err, "Erro ao salvar o limite de números");
     } finally {
       setNumbersSaving(false);
     }
   }
 
   async function saveNumber(numberId: string, patch: { label?: string; accessPin?: string }) {
+    if (numbersSaving) return;
     setNumbersSaving(true);
     try {
-      await call("update_user_number", { numberId, ...patch });
+      await adminCall("update_user_number", creds!, { numberId, ...patch });
       toast.success("Número atualizado");
       if (numbersTarget) await openNumbersDialog(numbersTarget);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao salvar número");
+    } catch (err) {
+      reportError(err, "Erro ao salvar o número");
     } finally {
       setNumbersSaving(false);
     }
   }
 
   async function removeNumber(numberId: string) {
+    if (numbersSaving) return;
     if (!confirm("Remover este número do cadastro?")) return;
     setNumbersSaving(true);
     try {
-      await call("delete_user_number", { numberId });
+      await adminCall("delete_user_number", creds!, { numberId });
       toast.success("Número removido");
       if (numbersTarget) await openNumbersDialog(numbersTarget);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao remover");
+    } catch (err) {
+      reportError(err, "Erro ao remover o número");
     } finally {
       setNumbersSaving(false);
     }
@@ -1041,7 +1082,7 @@ export default function AdminCentral() {
   }
 
   async function savePassword() {
-    if (!pwdTarget) return;
+    if (!pwdTarget || savingPwd) return;
     const pwd = newPwd.trim();
     if (pwd.length < 6) {
       toast.error("Senha deve ter no mínimo 6 caracteres");
@@ -1049,7 +1090,7 @@ export default function AdminCentral() {
     }
     setSavingPwd(true);
     try {
-      await call("set_password", { userId: pwdTarget.id, newPassword: pwd });
+      await adminCall("set_password", creds!, { userId: pwdTarget.id, newPassword: pwd });
       try {
         await navigator.clipboard.writeText(pwd);
       } catch {
@@ -1057,12 +1098,17 @@ export default function AdminCentral() {
       }
       toast.success(`Senha de ${pwdTarget.email} alterada e copiada`);
       setPwdDialogOpen(false);
-    } catch (err: any) {
-      toast.error(err.message || "Erro ao trocar a senha");
+    } catch (err) {
+      if (isUnconfirmed(err)) {
+        toast.error("Troca de senha não confirmada. Peça ao usuário para testar antes de repetir.");
+      } else {
+        reportError(err, "Erro ao trocar a senha");
+      }
     } finally {
       setSavingPwd(false);
     }
   }
+
 
   // ============ LOGIN ============
   if (!creds) {
