@@ -94,18 +94,8 @@ const STORAGE_KEY = "admincentral_creds_v1";
  * garante tempo limite, cancelamento e mensagem de erro acionável. Antes cada
  * painel chamava a função sem limite próprio e o botão girava para sempre.
  */
-async function invokeAdminFn(
-  body: Record<string, unknown>,
-  timeoutMs = ADMIN_TIMEOUTS.write
-): Promise<any> {
-  const { action, adminEmail, adminPassword, ...extra } = body as any;
-  return adminCall(
-    String(action),
-    { email: String(adminEmail || ""), password: String(adminPassword || "") },
-    extra,
-    { timeoutMs }
-  );
-}
+
+
 
 /**
  * Credenciais do Admin Central.
