@@ -50,10 +50,14 @@ type AdminUser = {
   full_name: string | null;
   whatsapp_profile_number: string | null;
   role: string;
+  access_locked?: boolean;
+  access_lock_reason?: string | null;
+  access_locked_at?: string | null;
   meta_display_phone_number: string | null;
   meta_verified_name: string | null;
   meta_phone_number_id: string | null;
   connected: boolean;
+
 };
 
 type Insights = {
