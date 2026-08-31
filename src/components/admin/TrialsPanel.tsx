@@ -269,7 +269,7 @@ export default function TrialsPanel({ creds }: Props) {
             onChange={(e) => setSearch(e.target.value)}
             className="w-64"
           />
-          <Button size="sm" variant="outline" onClick={load} disabled={loading}>
+          <Button size="sm" variant="outline" onClick={() => load()} disabled={loading}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
           </Button>
         </div>

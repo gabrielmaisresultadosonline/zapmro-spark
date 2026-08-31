@@ -140,7 +140,7 @@ export default function SalesOrdersPanel({ creds }: { creds: AdminCreds }) {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-xl font-bold text-[#075E54]">Vendas (Página de Vendas)</h2>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading} className="bg-white border-[#E8F5F1] text-[#075E54] hover:bg-[#F0FDF4]">
+        <Button variant="outline" size="sm" onClick={() => load()} disabled={loading} className="bg-white border-[#E8F5F1] text-[#075E54] hover:bg-[#F0FDF4]">
           <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
           Recarregar
         </Button>
