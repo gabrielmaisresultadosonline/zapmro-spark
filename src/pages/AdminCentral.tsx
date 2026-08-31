@@ -175,6 +175,9 @@ async function invokeAdminLogin(email: string, password: string) {
       signal: controller.signal,
     });
     const payload: unknown = await response.json();
+    if (response.status === 404 || response.status >= 500) {
+      throw new Error(`Login rápido indisponível (HTTP ${response.status})`);
+    }
     if (payload && typeof payload === "object") return payload;
     throw new Error("Resposta inválida do servidor");
   } catch (error) {
