@@ -124,50 +124,68 @@ export default function TrialsPanel({ creds }: Props) {
       if (!confirm(`Liberar ${plan.toUpperCase()} para ${t.email}?\n\nSerá enviado um email de liberação com email e uma NOVA senha de acesso.`)) return;
     }
     setBusyId(t.id);
+    // requestId estável: se o navegador desistir da resposta, repetir a ação
+    // não gera dois planos nem duas senhas novas.
+    const requestId = newRequestId();
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: {
-          action: "grant_access",
+      const data = await adminCall<{ accessUntil?: string; emailQueued?: boolean }>(
+        "grant_access",
+        creds,
+        {
           email: t.email,
           plan: planToSend,
           days,
           // envia junto no email de liberação uma senha nova de acesso
           resetPassword: true,
-          adminEmail: creds.email,
-          adminPassword: creds.password,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+          requestId,
+        }
+      );
+      // Aplica o resultado na hora: a lista não espera a releitura para mostrar
+      // que o plano entrou.
+      setTrials((prev) =>
+        prev.map((x) =>
+          x.id === t.id
+            ? {
+                ...x,
+                is_paid: true,
+                plan: plan === "custom" ? x.plan : planToSend,
+                access_until: data.accessUntil ?? x.access_until,
+                status: "paid",
+              }
+            : x
+        )
+      );
       toast.success(
         plan === "custom"
           ? `Acesso liberado por ${days} dia(s) para ${t.email}`
           : `Acesso liberado (${plan}) para ${t.email}`
       );
-      await load();
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao liberar acesso");
+      void load(true);
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Liberação não confirmada. Atualize a lista para verificar antes de repetir.");
+        void load(true);
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao liberar acesso"));
+      }
     } finally {
       setBusyId(null);
     }
   };
 
   const resendEmail = async (t: Trial) => {
+    if (resendId) return;
     setResendId(t.id);
+    const requestId = newRequestId();
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: {
-          action: "resend_access_email",
-          email: t.email,
-          adminEmail: creds.email,
-          adminPassword: creds.password,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+      await adminCall("resend_access_email", creds, { email: t.email, requestId });
       toast.success(`Email reenviado para ${t.email}`);
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao reenviar email");
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Reenvio não confirmado. Verifique a caixa do cliente antes de repetir.");
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao reenviar email"));
+      }
     } finally {
       setResendId(null);
     }
@@ -182,22 +200,22 @@ export default function TrialsPanel({ creds }: Props) {
       return;
     setCancelId(t.id);
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: {
-          action: "cancel_access",
-          email: t.email,
-          adminEmail: creds.email,
-          adminPassword: creds.password,
-        },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro");
+      await adminCall("cancel_access", creds, { email: t.email });
+      setTrials((prev) =>
+        prev.map((x) => (x.id === t.id ? { ...x, is_paid: false, status: "trial_expired", hours_left: 0 } : x))
+      );
       toast.success(`Plano cancelado — ${t.email} está travado até pagar novamente`);
-      await load();
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao cancelar plano");
+      void load(true);
+    } catch (e) {
+      if (isUnconfirmed(e)) {
+        toast.error("Cancelamento não confirmado. Atualize a lista para verificar.");
+        void load(true);
+      } else {
+        toast.error(adminErrorMessage(e, "Erro ao cancelar plano"));
+      }
     } finally {
       setCancelId(null);
+
     }
   };
 
