@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Download, Loader2, FileCode2, HardDrive, BookOpen, KeyRound, ShieldAlert } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
+import { ADMIN_TIMEOUTS, adminCall, adminErrorMessage } from "@/lib/adminCentralApi";
 
 /**
  * MigrationExtras — exportações complementares ao dump SQL:
