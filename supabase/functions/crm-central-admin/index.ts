@@ -21,6 +21,24 @@ function json(body: unknown, status = 200) {
   });
 }
 
+/**
+ * Executa tarefas lentas (e-mail) FORA do ciclo da resposta.
+ *
+ * Antes o painel esperava o provedor de e-mail antes de confirmar a operação —
+ * quando o envio demorava, o botão ficava carregando até o tempo esgotar mesmo
+ * com a gravação já concluída no banco. Agora a resposta sai imediatamente após
+ * a escrita crítica e o envio continua em segundo plano.
+ */
+function background(label: string, task: () => Promise<unknown>) {
+  const run = Promise.resolve()
+    .then(task)
+    .catch((e) => console.error(`[${label}] background error:`, e));
+  const runtime = (globalThis as any).EdgeRuntime;
+  if (runtime?.waitUntil) runtime.waitUntil(run);
+  return run;
+}
+
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
