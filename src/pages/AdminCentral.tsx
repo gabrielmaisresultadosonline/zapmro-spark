@@ -402,8 +402,9 @@ function MigrationPanel({ creds }: { creds: AdminCreds }) {
       });
 
       toast.success("Dump completo gerado com sucesso!");
-    } catch (err: any) {
-      toast.error(err.message || "Falha ao exportar dump");
+    } catch (err) {
+      toast.error(adminErrorMessage(err, "Falha ao exportar dump"));
+
     } finally {
       setDumping(false);
       setProgress(null);
