@@ -4868,7 +4868,8 @@ const CRM = () => {
   const isWhatsAppConnected = whatsAppConnectionConfirmed || !!(metaSettings.meta_access_token && metaSettings.meta_phone_number_id && metaSettings.meta_waba_id);
 
   // Multi-WhatsApp habilitado: escolhe qual número abrir antes das conversas.
-  const multiNumberEnabled = maxWhatsAppNumbers > 1;
+  // Seletor de WhatsApp: aparece para todos os cadastros (mesmo com 1 número liberado).
+  const multiNumberEnabled = maxWhatsAppNumbers >= 1;
   const handleSwitchNumber = () => {
     if (!currentUserId) return;
     persistActiveNumberId(currentUserId, null);
