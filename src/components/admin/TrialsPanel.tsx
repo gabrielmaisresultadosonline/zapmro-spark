@@ -73,27 +73,38 @@ export default function TrialsPanel({ creds }: Props) {
   const [selectedPlan, setSelectedPlan] = useState<Record<string, string>>({});
   const [customDays, setCustomDays] = useState<Record<string, string>>({});
 
-  const load = async () => {
-    setLoading(true);
+  const mountedRef = useRef(true);
+  const loadingRef = useRef(false);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
+  /**
+   * `silent` é usado pela atualização automática: se a rede falhar de fundo, não
+   * enche a tela de avisos — e o loader sempre termina.
+   */
+  const load = async (silent = false) => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    if (!silent) setLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: { action: "list_trials", adminEmail: creds.email, adminPassword: creds.password },
-      });
-      if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Erro ao carregar");
+      const data = await adminRead<{ trials?: Trial[] }>("list_trials", creds);
+      if (!mountedRef.current) return;
       setTrials(data.trials || []);
-    } catch (e: any) {
-      toast.error(e.message || "Erro ao carregar cadastros");
+    } catch (e) {
+      if (!mountedRef.current || silent) return;
+      toast.error(adminErrorMessage(e, "Erro ao carregar cadastros"));
     } finally {
-      setLoading(false);
+      loadingRef.current = false;
+      if (mountedRef.current) setLoading(false);
     }
   };
 
   useEffect(() => {
     load();
-    const iv = setInterval(load, 60000);
+    const iv = setInterval(() => load(true), 60000);
     return () => clearInterval(iv);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
 
   const approve = async (t: Trial) => {
     const plan = selectedPlan[t.id] || "mensal";
