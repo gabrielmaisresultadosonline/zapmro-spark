@@ -1175,6 +1175,13 @@ export default function AdminCentral() {
                         </Badge>
                       )}
                       {u.role === "super_admin" && <Badge className="bg-[#075E54] text-white hover:bg-[#075E54]">super_admin</Badge>}
+                      {u.access_locked && (
+                        <Badge className="bg-red-100 text-red-700 hover:bg-red-100 border border-red-200 gap-1">
+                          <Lock className="h-3 w-3" />
+                          Travado{u.access_lock_reason ? `: ${u.access_lock_reason}` : ""}
+                        </Badge>
+                      )}
+
                     </div>
                     <div className="text-sm text-[#128C7E]/80 flex items-center gap-1">
                       <Mail className="h-3.5 w-3.5" />
