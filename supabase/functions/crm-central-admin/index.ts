@@ -408,6 +408,39 @@ serve(async (req) => {
       return json({ success: true, users });
     }
 
+    // ===== Travar / destravar o acesso de um cadastro =====
+    if (action === "lock_user" || action === "unlock_user") {
+      const { userId, reason } = body as any;
+      if (typeof userId !== "string" || !userId) {
+        return json({ success: false, error: "userId obrigatório" });
+      }
+
+      const locking = action === "lock_user";
+      const cleanReason = typeof reason === "string" ? reason.trim().slice(0, 500) : "";
+
+      const payload = locking
+        ? {
+            access_locked: true,
+            access_lock_reason: cleanReason || "Pendência com a administração",
+            access_locked_at: new Date().toISOString(),
+          }
+        : { access_locked: false, access_lock_reason: null, access_locked_at: null };
+
+      const { error: lockError } = await supabase
+        .from("crm_profiles")
+        .update(payload)
+        .eq("user_id", userId);
+
+      if (lockError) {
+        console.error(`[${action}] falhou:`, lockError.message);
+        return json({ success: false, error: "Não foi possível atualizar o travamento" });
+      }
+
+      return json({ success: true, locked: locking });
+    }
+
+
+
     if (action === "user_insights") {
       const { userId } = body as any;
       if (!userId) return json({ success: false, error: "userId obrigatório" });
