@@ -74,8 +74,10 @@ const STORAGE_KEY = "admincentral_creds_v1";
 
 /**
  * Chamada resiliente à Edge Function do admin.
+ * - Tenta primeiro o `fetch` direto (bem mais rápido que o SDK, que faz
+ *   pré-checagens de sessão e pode demorar vários segundos no login)
+ * - Cai para o SDK apenas se o fetch direto não estiver disponível/falhar
  * - Timeout explícito (evita o botão ficar "carregando" para sempre)
- * - Fallback via fetch direto caso o SDK trave/erro de rede
  */
 async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): Promise<any> {
   const withTimeout = <T,>(p: Promise<T>): Promise<T> =>
@@ -86,34 +88,11 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
       ),
     ]);
 
-  try {
-    const { data, error } = await withTimeout(
-      supabase.functions.invoke("crm-central-admin", { body }) as Promise<any>
-    );
-    if (error) {
-      // A SDK converte QUALQUER status !=2xx em "non-2xx status code" e esconde
-      // a mensagem real. Lemos o corpo da resposta para devolver o erro correto.
-      const ctx: any = (error as any)?.context;
-      if (ctx && typeof ctx.text === "function") {
-        try {
-          const raw = await ctx.text();
-          const parsed = JSON.parse(raw);
-          if (parsed && typeof parsed === "object") return parsed;
-        } catch {
-          /* segue para o fallback */
-        }
-      }
-      throw error;
-    }
-    if (data) return data;
-    throw new Error("Resposta vazia do servidor");
-  } catch (sdkErr) {
+  const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
+  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
 
-    // Fallback: fetch direto no endpoint público das functions
-    const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
-    const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
-    if (!baseUrl) throw sdkErr;
-
+  // 1) Caminho rápido: fetch direto no endpoint das functions
+  if (baseUrl) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
@@ -132,11 +111,36 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
       } catch {
         throw new Error(text?.slice(0, 200) || `HTTP ${res.status}`);
       }
+    } catch (fetchErr) {
+      console.warn("[AdminCentral] fetch direto falhou, tentando SDK:", fetchErr);
     } finally {
       clearTimeout(timer);
     }
   }
+
+  // 2) Fallback: SDK do Supabase
+  const { data, error } = await withTimeout(
+    supabase.functions.invoke("crm-central-admin", { body }) as Promise<any>
+  );
+  if (error) {
+    // A SDK converte QUALQUER status !=2xx em "non-2xx status code" e esconde
+    // a mensagem real. Lemos o corpo da resposta para devolver o erro correto.
+    const ctx: any = (error as any)?.context;
+    if (ctx && typeof ctx.text === "function") {
+      try {
+        const raw = await ctx.text();
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === "object") return parsed;
+      } catch {
+        /* ignora */
+      }
+    }
+    throw error;
+  }
+  if (data) return data;
+  throw new Error("Resposta vazia do servidor");
 }
+
 
 
 function ReportStat({
