@@ -389,11 +389,15 @@ serve(async (req) => {
           full_name: p.full_name || null,
           whatsapp_profile_number: p.whatsapp_number || null,
           role: p.role || "user",
+          access_locked: p.access_locked === true,
+          access_lock_reason: p.access_lock_reason || null,
+          access_locked_at: p.access_locked_at || null,
           meta_display_phone_number: s.meta_display_phone_number || null,
           meta_verified_name: s.meta_verified_name || null,
           meta_phone_number_id: s.meta_phone_number_id || null,
           connected,
         };
+
       });
 
       // Sort newest first
