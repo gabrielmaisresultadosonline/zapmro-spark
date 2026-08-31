@@ -363,8 +363,9 @@ serve(async (req) => {
 
       const { data: profiles } = await supabase
         .from("crm_profiles")
-        .select("user_id, full_name, whatsapp_number, role, created_at")
+        .select("user_id, full_name, whatsapp_number, role, created_at, access_locked, access_lock_reason, access_locked_at")
         .in("user_id", userIds);
+
 
       const { data: settings } = await supabase
         .from("crm_settings")
