@@ -81,98 +81,30 @@ type DumpProgress = {
 const STORAGE_KEY = "admincentral_creds_v1";
 
 /**
- * Chamada resiliente à Edge Function do admin.
- * - Tenta primeiro o `fetch` direto (bem mais rápido que o SDK, que faz
- *   pré-checagens de sessão e pode demorar vários segundos no login)
- * - Cai para o SDK apenas se o fetch direto não estiver disponível/falhar
- * - Timeout explícito (evita o botão ficar "carregando" para sempre)
+ * Todas as operações passam pelo cliente único (`@/lib/adminCentralApi`), que
+ * garante tempo limite, cancelamento e mensagem de erro acionável. Antes cada
+ * painel chamava a função sem limite próprio e o botão girava para sempre.
  */
-async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): Promise<any> {
-  const withTimeout = <T,>(p: Promise<T>): Promise<T> =>
-    Promise.race([
-      p,
-      new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error("Tempo esgotado ao contatar o servidor. Tente novamente.")), timeoutMs)
-      ),
-    ]);
-
-  const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
-  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
-
-  // 1) Caminho rápido: fetch direto no endpoint das functions
-  if (baseUrl) {
-    const controller = new AbortController();
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, timeoutMs);
-    try {
-      const res = await fetch(`${baseUrl}/functions/v1/crm-central-admin`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(anonKey ? { apikey: anonKey, Authorization: `Bearer ${anonKey}` } : {}),
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const text = await res.text();
-      try {
-        return JSON.parse(text);
-      } catch {
-        throw new Error(text?.slice(0, 200) || `HTTP ${res.status}`);
-      }
-    } catch (fetchErr) {
-      // Se o próprio tempo limite estourou, tentar o SDK apenas duplicaria a
-      // espera (o usuário ficava "carregando" por 60s). Falhamos direto.
-      if (timedOut) {
-        throw new Error("Tempo esgotado ao contatar o servidor. Tente novamente.");
-      }
-      console.warn("[AdminCentral] fetch direto falhou, tentando SDK:", fetchErr);
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-
-  // 2) Fallback: SDK do Supabase
-  const { data, error } = await withTimeout(
-    supabase.functions.invoke("crm-central-admin", { body }) as Promise<any>
+async function invokeAdminFn(
+  body: Record<string, unknown>,
+  timeoutMs = ADMIN_TIMEOUTS.write
+): Promise<any> {
+  const { action, adminEmail, adminPassword, ...extra } = body as any;
+  return adminCall(
+    String(action),
+    { email: String(adminEmail || ""), password: String(adminPassword || "") },
+    extra,
+    { timeoutMs }
   );
-  if (error) {
-    // A SDK converte QUALQUER status !=2xx em "non-2xx status code" e esconde
-    // a mensagem real. Lemos o corpo da resposta para devolver o erro correto.
-    const ctx: any = (error as any)?.context;
-    if (ctx && typeof ctx.text === "function") {
-      try {
-        const raw = await ctx.text();
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === "object") return parsed;
-      } catch {
-        /* ignora */
-      }
-    }
-    throw error;
-  }
-  if (data) return data;
-  throw new Error("Resposta vazia do servidor");
 }
 
 /**
  * Credenciais do Admin Central.
  *
- * Motivo desta abordagem: o login antes dependia de uma Edge Function remota.
- * Quando essa função não estava publicada (ou demorava para "acordar"), o
- * botão ficava carregando e terminava em "Tempo esgotado ao contatar o
- * servidor" — sem nunca entrar. A verificação passa a ser local e instantânea.
- *
- * A senha não fica em texto puro no bundle: comparamos o digest SHA-256.
- * Isso não é uma barreira criptográfica de verdade (nenhuma checagem no
- * navegador é), mas o acesso real aos dados continua protegido no servidor:
- * toda operação da tela reenvia as credenciais para a Edge Function, que as
- * valida antes de tocar no banco. Ou seja, entrar na tela não dá acesso a
- * nada por si só.
+ * O login é validado localmente (SHA-256) para nunca depender de uma Edge
+ * Function remota — era isso que causava o carregamento infinito. O acesso real
+ * aos dados continua protegido no servidor: toda ação reenvia as credenciais
+ * para a função, que valida antes de tocar no banco.
  */
 const ADMIN_EMAIL_FALLBACK = "mro@gmail.com";
 const ADMIN_PASSWORD_SHA256_FALLBACK =
@@ -222,20 +154,22 @@ async function invokeAdminLogin(email: string, password: string): Promise<AdminL
     return { success: true };
   } catch (error) {
     // crypto.subtle exige contexto seguro (https ou localhost). Em HTTP puro
-    // ele não existe — nesse caso caímos para a validação no servidor em vez
-    // de bloquear o acesso do administrador.
+    // ele não existe — nesse caso validamos no servidor (função leve dedicada).
     console.warn("[AdminCentral] crypto.subtle indisponível, validando no servidor:", error);
     try {
-      const data = await invokeAdminFn(
-        { action: "login", adminEmail: normalizedEmail, adminPassword: password },
-        12000
+      const data = await adminCall(
+        "login",
+        { email: normalizedEmail, password },
+        {},
+        { fn: "crm-central-admin-login", timeoutMs: 10000 }
       );
       return { success: Boolean(data?.success), error: data?.error };
-    } catch (serverError: any) {
-      return { success: false, error: serverError?.message || "Falha no login" };
+    } catch (serverError) {
+      return { success: false, error: adminErrorMessage(serverError, "Falha no login") };
     }
   }
 }
+
 
 
 
