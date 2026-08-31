@@ -1,0 +1,1 @@
+ALTER TABLE public.prompts_mro_users ADD COLUMN IF NOT EXISTS subscription_end timestamp with time zone;

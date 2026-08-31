@@ -1,0 +1,27 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1787948926668,
+      "tag": "0000_admin_full_dump_extras",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1787950876514,
+      "tag": "0001_admin_dump_full_functions",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1788028920862,
+      "tag": "0002_fix_admin_dump_policies_ambiguous_roles",
+      "breakpoints": true
+    }
+  ]
+}

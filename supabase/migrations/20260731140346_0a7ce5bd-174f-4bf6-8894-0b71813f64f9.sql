@@ -1,0 +1,2 @@
+ALTER TABLE public.crm_contacts DROP CONSTRAINT IF EXISTS crm_contacts_flow_state_check;
+ALTER TABLE public.crm_contacts ADD CONSTRAINT crm_contacts_flow_state_check CHECK (flow_state IN ('idle','running','waiting_response','waiting_delay','ai_handling','error','processing','paused','completed'));

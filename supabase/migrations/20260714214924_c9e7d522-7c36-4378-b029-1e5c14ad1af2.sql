@@ -1,0 +1,3 @@
+CREATE POLICY "Authenticated upload tutorials assets" ON storage.objects FOR INSERT TO authenticated WITH CHECK (bucket_id = 'assets' AND (storage.foldername(name))[1] IN ('tutorials','covers','videos','banners'));
+CREATE POLICY "Authenticated update tutorials assets" ON storage.objects FOR UPDATE TO authenticated USING (bucket_id = 'assets' AND (storage.foldername(name))[1] IN ('tutorials','covers','videos','banners')) WITH CHECK (bucket_id = 'assets' AND (storage.foldername(name))[1] IN ('tutorials','covers','videos','banners'));
+CREATE POLICY "Authenticated delete tutorials assets" ON storage.objects FOR DELETE TO authenticated USING (bucket_id = 'assets' AND (storage.foldername(name))[1] IN ('tutorials','covers','videos','banners'));

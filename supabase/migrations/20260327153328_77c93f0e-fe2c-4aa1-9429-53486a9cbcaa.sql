@@ -1,0 +1,1 @@
+ALTER TABLE public.zapi_messages ADD COLUMN IF NOT EXISTS metadata jsonb DEFAULT null;

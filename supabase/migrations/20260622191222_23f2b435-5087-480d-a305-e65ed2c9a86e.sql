@@ -1,0 +1,1 @@
+ALTER TABLE public.crm_broadcasts ALTER COLUMN message_text DROP NOT NULL;

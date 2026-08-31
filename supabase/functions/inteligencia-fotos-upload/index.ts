@@ -1,0 +1,64 @@
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    const formData = await req.formData();
+    const file = formData.get("file") as File;
+    const userId = formData.get("userId") as string;
+    const type = formData.get("type") as string || "user";
+
+    if (!file) {
+      return new Response(
+        JSON.stringify({ success: false, error: "Nenhum arquivo enviado" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const fileBuffer = await file.arrayBuffer();
+    const fileName = `${type}/${userId || 'admin'}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+
+    const { data, error } = await supabase.storage
+      .from("inteligencia-fotos")
+      .upload(fileName, fileBuffer, {
+        contentType: file.type,
+        upsert: false,
+      });
+
+    if (error) {
+      console.error("Upload error:", error);
+      return new Response(
+        JSON.stringify({ success: false, error: "Erro ao fazer upload" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const { data: urlData } = supabase.storage
+      .from("inteligencia-fotos")
+      .getPublicUrl(data.path);
+
+    return new Response(
+      JSON.stringify({ success: true, url: urlData.publicUrl, path: data.path }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error("Upload error:", error);
+    return new Response(
+      JSON.stringify({ success: false, error: "Erro interno" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+});

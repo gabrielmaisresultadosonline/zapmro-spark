@@ -1,0 +1,1 @@
+ALTER TABLE public.crm_contacts ADD COLUMN IF NOT EXISTS next_execution_time TIMESTAMP WITH TIME ZONE;

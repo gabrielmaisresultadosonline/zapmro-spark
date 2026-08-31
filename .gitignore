@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment files - IMPORTANTE: .env fica ignorado para NAO sobrescrever o da VPS no git pull
+.env
+.env.*
+!.env.example
+!.env.postgres
+deploy/postgres-stack/.env
+deploy/postgres-stack/secrets.env
+
+# stack PostgreSQL própria
+deploy/.migracao/

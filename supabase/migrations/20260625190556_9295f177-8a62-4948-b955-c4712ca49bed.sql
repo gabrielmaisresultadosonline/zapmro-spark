@@ -1,0 +1,1 @@
+ALTER TABLE public.crm_settings ADD COLUMN IF NOT EXISTS countdown_trigger_status_filter text[] NOT NULL DEFAULT '{}';

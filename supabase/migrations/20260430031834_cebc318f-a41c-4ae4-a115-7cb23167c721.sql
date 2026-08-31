@@ -1,0 +1,1 @@
+ALTER TABLE public.crm_messages ADD COLUMN media_url TEXT;

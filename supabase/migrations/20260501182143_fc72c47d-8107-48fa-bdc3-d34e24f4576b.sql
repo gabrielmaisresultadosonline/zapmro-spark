@@ -1,0 +1,1 @@
+ALTER TABLE public.crm_templates ADD COLUMN IF NOT EXISTS knowledge_description TEXT;

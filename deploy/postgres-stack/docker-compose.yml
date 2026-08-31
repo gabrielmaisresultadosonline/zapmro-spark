@@ -1,0 +1,207 @@
+# =============================================================================
+#  ZapMRO — Stack 100% própria em PostgreSQL (sem Lovable Cloud / Supabase SaaS)
+#  Sobe: PostgreSQL + Auth (GoTrue) + API REST (PostgREST) + Realtime +
+#        Storage + Edge Runtime (Deno, roda as 118 functions) + Gateway Nginx
+#
+#  Tudo fica atrás de UM host só (ex.: https://api.zapmro.com.br) com as MESMAS
+#  rotas do Supabase (/auth/v1, /rest/v1, /realtime/v1, /storage/v1, /functions/v1),
+#  então o frontend NÃO precisa ser reescrito: basta trocar VITE_SUPABASE_URL.
+# =============================================================================
+name: zapmro-postgres
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: { max-size: "10m", max-file: "3" }
+
+services:
+  # --------------------------------------------------------------------- DB --
+  db:
+    <<: *common
+    image: supabase/postgres:15.8.1.060
+    container_name: zapmro-db
+    command:
+      - postgres
+      - -c
+      - config_file=/etc/postgresql/postgresql.conf
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-300}
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-512MB}
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET:?defina JWT_SECRET}
+      JWT_EXP: 3600
+    volumes:
+      - db-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  # ------------------------------------------------------------------- AUTH --
+  auth:
+    <<: *common
+    image: supabase/gotrue:v2.174.0
+    container_name: zapmro-auth
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      PORT: 9999
+      API_EXTERNAL_URL: ${PUBLIC_API_URL:?defina PUBLIC_API_URL}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}?search_path=auth&sslmode=disable
+      GOTRUE_SITE_URL: ${SITE_URL:?defina SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${ADDITIONAL_REDIRECT_URLS:-}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+      GOTRUE_DISABLE_SIGNUP: ${DISABLE_SIGNUP:-false}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: ${MAILER_AUTOCONFIRM:-true}
+      GOTRUE_SMTP_HOST: ${SMTP_HOST:-}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT:-465}
+      GOTRUE_SMTP_USER: ${SMTP_USER:-}
+      GOTRUE_SMTP_PASS: ${SMTP_PASS:-}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_ADMIN_EMAIL:-}
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOOGLE_ENABLED:-false}
+      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${PUBLIC_API_URL}/auth/v1/callback
+      GOTRUE_EXTERNAL_FACEBOOK_ENABLED: ${FACEBOOK_ENABLED:-false}
+      GOTRUE_EXTERNAL_FACEBOOK_CLIENT_ID: ${FACEBOOK_APP_ID:-}
+      GOTRUE_EXTERNAL_FACEBOOK_SECRET: ${FACEBOOK_APP_SECRET:-}
+      GOTRUE_EXTERNAL_FACEBOOK_REDIRECT_URI: ${PUBLIC_API_URL}/auth/v1/callback
+
+  # ------------------------------------------------------------------- REST --
+  rest:
+    <<: *common
+    image: postgrest/postgrest:v12.2.12
+    container_name: zapmro-rest
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PGRST_DB_URI: postgres://authenticator:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
+      PGRST_DB_SCHEMAS: ${PGRST_SCHEMAS:-public,storage,graphql_public}
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+      PGRST_APP_SETTINGS_JWT_SECRET: ${JWT_SECRET}
+      PGRST_APP_SETTINGS_JWT_EXP: 3600
+      PGRST_DB_MAX_ROWS: 100000
+      PGRST_DB_POOL: ${PGRST_POOL:-30}
+
+  # --------------------------------------------------------------- REALTIME --
+  realtime:
+    <<: *common
+    image: supabase/realtime:v2.34.47
+    container_name: zapmro-realtime
+    depends_on:
+      db: { condition: service_healthy }
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: supabase_admin
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB:-postgres}
+      DB_AFTER_CONNECT_QUERY: SET search_path TO _realtime
+      DB_ENC_KEY: ${REALTIME_ENC_KEY:?defina REALTIME_ENC_KEY}
+      API_JWT_SECRET: ${JWT_SECRET}
+      SECRET_KEY_BASE: ${REALTIME_SECRET_KEY_BASE:?defina REALTIME_SECRET_KEY_BASE}
+      ERL_AFLAGS: -proto_dist inet_tcp
+      DNS_NODES: "''"
+      RLIMIT_NOFILE: "10000"
+      APP_NAME: realtime
+      SEED_SELF_HOST: "true"
+      RUN_JANITOR: "true"
+
+  # ---------------------------------------------------------------- STORAGE --
+  storage:
+    <<: *common
+    image: supabase/storage-api:v1.19.3
+    container_name: zapmro-storage
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5000/status"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    depends_on:
+      db: { condition: service_healthy }
+      rest: { condition: service_started }
+    environment:
+      ANON_KEY: ${ANON_KEY:?defina ANON_KEY}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY:?defina SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_storage_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}?search_path=storage,public
+      FILE_SIZE_LIMIT: ${STORAGE_FILE_SIZE_LIMIT:-524288000}
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: zapmro
+      REGION: local
+      GLOBAL_S3_BUCKET: zapmro
+      ENABLE_IMAGE_TRANSFORMATION: "false"
+    volumes:
+      - storage-data:/var/lib/storage
+
+  # ----------------------------------------------- EDGE FUNCTIONS (Deno) -----
+  functions:
+    <<: *common
+    image: supabase/edge-runtime:v1.67.4
+    container_name: zapmro-functions
+    depends_on:
+      db: { condition: service_healthy }
+    command: ["start", "--main-service", "/home/deno/main"]
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 1 bash -c '</dev/tcp/127.0.0.1/9000' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    environment:
+      SUPABASE_URL: ${INTERNAL_API_URL:-http://gateway:8000}
+      # URL pública usada em callbacks externos (webhook da Meta, OAuth, etc.).
+      PUBLIC_API_URL: ${PUBLIC_API_URL}
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+      SUPABASE_DB_URL: postgres://postgres:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-postgres}
+      VERIFY_JWT: "false"
+    env_file:
+      - ./secrets.env
+    volumes:
+      - ../../supabase/functions:/home/deno/functions:ro
+      - ./functions-main:/home/deno/main:ro
+
+  # ---------------------------------------------------------------- GATEWAY --
+  gateway:
+    <<: *common
+    image: nginx:1.27-alpine
+    container_name: zapmro-gateway
+    depends_on:
+      auth: { condition: service_started }
+      rest: { condition: service_started }
+      realtime: { condition: service_started }
+      storage: { condition: service_healthy }
+      functions: { condition: service_healthy }
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+
+  # ------------------------------------------------------------------- CRON --
+  # pg_cron roda dentro do próprio Postgres (extensão criada no init).
+
+volumes:
+  db-data:
+  storage-data:

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS public.idx_free_trial_instagram;

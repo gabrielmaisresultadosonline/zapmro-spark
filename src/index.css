@@ -1,0 +1,534 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap');
+
+#lovable-badge {
+  display: none !important;
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 84% 4.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
+
+    --primary: 164 100% 26%; /* WhatsApp Business Green #075E54 */
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 164 25% 95%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --accent: 142 76% 36%; /* WhatsApp Bright Green #25D366 */
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+    --ring: 164 100% 26%;
+
+    --radius: 0.75rem;
+
+    /* Custom WhatsApp Colors */
+    --mro-green: 164 100% 26%;
+    --mro-green-light: 142 76% 36%;
+    --mro-green-dark: 164 100% 20%;
+    --whatsapp-chat-bg: 37 32% 92%; /* #E5DDD5 */
+    --whatsapp-bubble-out: 142 45% 85%; /* #DCF8C6 */
+    --whatsapp-bubble-in: 0 0% 100%; /* #FFFFFF */
+    
+    /* Sidebar specific */
+    --sidebar-background: 164 100% 15%; /* Dark WhatsApp Green */
+    --sidebar-foreground: 210 40% 98%;
+    --sidebar-primary: 142 76% 36%;
+    --sidebar-primary-foreground: 210 40% 98%;
+    --sidebar-accent: 164 100% 20%;
+    --sidebar-accent-foreground: 210 40% 98%;
+    --sidebar-border: 164 100% 25%;
+    --sidebar-ring: 142 76% 36%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+
+    --popover: 222.2 84% 4.9%;
+    --popover-foreground: 210 40% 98%;
+
+    --primary: 164 100% 26%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+
+    --accent: 217.2 32.6% 17.5%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 62.8% 30.6%;
+    --destructive-foreground: 210 40% 98%;
+
+    --border: 217.2 32.6% 17.5%;
+    --input: 217.2 32.6% 17.5%;
+    --ring: 164 100% 26%;
+
+    --whatsapp-chat-bg: 0 0% 5%;
+    --whatsapp-bubble-out: 164 100% 15%;
+    --whatsapp-bubble-in: 217.2 32.6% 17.5%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-family: 'Inter', sans-serif;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Space Grotesk', sans-serif;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-card/60 backdrop-blur-xl border border-border/50 rounded-xl;
+    box-shadow: var(--shadow-card);
+  }
+
+  .glow-border {
+    position: relative;
+  }
+
+  .glow-border::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    padding: 1px;
+    background: var(--gradient-primary);
+    -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+    opacity: 0.5;
+    transition: opacity 0.3s ease;
+    pointer-events: none;
+  }
+
+  .glow-border:hover::before {
+    opacity: 1;
+  }
+
+  .text-gradient {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .btn-glow {
+    box-shadow: var(--shadow-button);
+    transition: all 0.3s ease;
+  }
+
+  .btn-glow:hover {
+    box-shadow: 0 6px 30px hsl(160 84% 45% / 0.5);
+    transform: translateY(-2px);
+  }
+
+  .bg-instagram-gradient {
+    background: var(--gradient-instagram);
+  }
+
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 2s ease-in-out infinite;
+  }
+
+  .animate-slide-up {
+    animation: slide-up 0.6s ease-out forwards;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 0.5s ease-out forwards;
+  }
+
+  /* Scrollbar hide utility */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-10px); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 20px hsl(160 84% 45% / 0.3); }
+  50% { box-shadow: 0 0 40px hsl(160 84% 45% / 0.6); }
+}
+
+@keyframes slide-up {
+  from { opacity: 0; transform: translateY(30px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes gradient-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+.bg-animated-gradient {
+  background: linear-gradient(-45deg, hsl(160 84% 45%), hsl(180 100% 45%), hsl(160 84% 45%), hsl(200 100% 50%));
+  background-size: 400% 400%;
+  animation: gradient-shift 8s ease infinite;
+}
+
+@keyframes shine {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-shine {
+  animation: shine 2s infinite;
+}
+
+/* Gold shimmer animation for text */
+@keyframes gold-shimmer {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.text-gold-shimmer {
+  background: linear-gradient(
+    90deg,
+    #b8860b 0%,
+    #ffd700 20%,
+    #ffed4e 35%,
+    #ffffff 50%,
+    #ffed4e 65%,
+    #ffd700 80%,
+    #b8860b 100%
+  );
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gold-shimmer 3s linear infinite;
+}
+
+/* ============================================================
+   CRM Light Theme — escopado em .crm-theme-light
+   Mantém todo o resto intacto; apenas troca as cores escuras
+   do CRM para um esquema claro inspirado no /admincentral.
+   ============================================================ */
+.crm-theme-light {
+  /* Surfaces (dark hex → light) */
+  --crm-bg: #ffffff;
+  --crm-surface: #F0FDF4;
+  --crm-surface-2: #E8F5F1;
+  --crm-surface-3: #ffffff;
+  --crm-input: #ffffff;
+  --crm-text: #0b1f1a;      /* near-black com toque verde para contraste alto */
+  --crm-text-strong: #052b22;
+  --crm-text-soft: #3b6a5e;
+  --crm-border: rgba(7, 94, 84, 0.12);
+  --crm-accent: #25D366;
+
+  /* Tokens shadcn/Tailwind locais: impedem text-foreground, bg-card,
+     bg-muted e waveform bg-foreground/25 de herdarem o tema escuro. */
+  --background: 0 0% 100%;
+  --foreground: 164 48% 8%;
+  --card: 136 70% 97%;
+  --card-foreground: 164 48% 8%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 164 48% 8%;
+  --primary: 164 100% 26%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 156 35% 93%;
+  --secondary-foreground: 164 48% 8%;
+  --muted: 156 35% 93%;
+  --muted-foreground: 164 28% 32%;
+  --accent: 142 76% 36%;
+  --accent-foreground: 164 48% 8%;
+  --border: 164 25% 84%;
+  --input: 164 25% 84%;
+  --sidebar-background: 136 70% 97%;
+  --sidebar-foreground: 164 48% 8%;
+  --sidebar-accent: 156 35% 93%;
+  --sidebar-accent-foreground: 164 48% 8%;
+  color: var(--crm-text);
+}
+
+/* Logo swap for CRM light/dark themes */
+.crm-theme-light .crm-logo-dark { display: none !important; }
+.crm-theme-light .crm-logo-light { display: inline-block !important; }
+
+/* Backgrounds */
+.crm-theme-light .bg-\[\#0c1317\],
+.crm-theme-light .bg-\[\#111b21\],
+.crm-theme-light .dark\:bg-\[\#0c1317\],
+.crm-theme-light .dark\:bg-\[\#111b21\] { background-color: var(--crm-bg) !important; }
+
+.crm-theme-light .bg-\[\#202c33\],
+.crm-theme-light .bg-\[\#1f2c34\],
+.crm-theme-light .dark\:bg-\[\#202c33\],
+.crm-theme-light .dark\:bg-\[\#2a3942\] { background-color: var(--crm-surface) !important; }
+
+.crm-theme-light .bg-\[\#2a3942\],
+.crm-theme-light .bg-\[\#1a2730\],
+.crm-theme-light .bg-\[\#0b141a\] { background-color: var(--crm-surface-2) !important; }
+
+.crm-theme-light .bg-\[\#f0f2f5\] { background-color: var(--crm-surface) !important; }
+
+/* Text */
+.crm-theme-light .text-white,
+.crm-theme-light .dark\:text-white { color: var(--crm-text) !important; }
+.crm-theme-light .text-white\/95,
+.crm-theme-light .text-white\/90 { color: rgba(11, 31, 26, 0.95) !important; }
+.crm-theme-light .text-white\/80 { color: rgba(11, 31, 26, 0.88) !important; }
+.crm-theme-light .text-white\/70 { color: rgba(11, 31, 26, 0.8) !important; }
+.crm-theme-light .text-white\/60 { color: rgba(11, 31, 26, 0.72) !important; }
+.crm-theme-light .text-white\/50 { color: rgba(11, 31, 26, 0.65) !important; }
+.crm-theme-light .text-white\/40 { color: rgba(11, 31, 26, 0.58) !important; }
+.crm-theme-light .text-white\/30 { color: rgba(11, 31, 26, 0.5) !important; }
+.crm-theme-light .placeholder\:text-white\/30::placeholder,
+.crm-theme-light .placeholder\:text-white\/40::placeholder,
+.crm-theme-light .placeholder\:text-white\/50::placeholder { color: rgba(11, 31, 26, 0.45) !important; }
+
+.crm-theme-light .text-\[\#aebac1\],
+.crm-theme-light .text-\[\#8696a0\],
+.crm-theme-light .dark\:text-\[\#aebac1\] { color: var(--crm-text-soft) !important; }
+
+/* Cobertura extra: títulos/labels que costumam vir em branco no header e tabs */
+.crm-theme-light .text-\[\#e9edef\],
+.crm-theme-light .text-\[\#d1d7db\],
+.crm-theme-light .text-\[\#aebac1\]\/80 { color: var(--crm-text) !important; }
+
+/* Backgrounds adicionais frequentemente usados como header/cartão escuro */
+.crm-theme-light .bg-\[\#0a0a0a\],
+.crm-theme-light .bg-\[\#0a0f12\],
+.crm-theme-light .bg-\[\#0f1a1f\],
+.crm-theme-light .bg-\[\#1a1d21\],
+.crm-theme-light .bg-\[\#161c20\] { background-color: var(--crm-bg) !important; }
+
+/* Botões/pílulas com bg transparente + borda branca: garantir texto legível */
+.crm-theme-light button.text-white,
+.crm-theme-light a.text-white,
+.crm-theme-light .text-white.border-white\/10,
+.crm-theme-light .text-white.border-white\/20 { color: var(--crm-text-strong) !important; }
+
+/* PRESERVA texto branco quando o fundo permanece escuro propositalmente
+   (balões verdes do WhatsApp, badges, etc.). Listamos as classes de fundo
+   verde/escuro mais comuns para reverter o texto para branco neles. */
+.crm-theme-light .bg-\[\#00a884\] .text-white,
+.crm-theme-light .bg-\[\#00a884\].text-white,
+.crm-theme-light .bg-\[\#008f6f\] .text-white,
+.crm-theme-light .bg-\[\#005c4b\] .text-white,
+.crm-theme-light .bg-\[\#005c4b\].text-white,
+.crm-theme-light .bg-\[\#06cf9c\] .text-white,
+.crm-theme-light .bg-\[\#25D366\] .text-white,
+.crm-theme-light .bg-\[\#25D366\].text-white,
+.crm-theme-light .bg-\[\#128C7E\] .text-white,
+.crm-theme-light .bg-\[\#075E54\] .text-white,
+.crm-theme-light .bg-green-500 .text-white,
+.crm-theme-light .bg-green-600 .text-white,
+.crm-theme-light .bg-emerald-500 .text-white,
+.crm-theme-light .bg-emerald-600 .text-white,
+.crm-theme-light .bg-red-500 .text-white,
+.crm-theme-light .bg-red-600 .text-white,
+.crm-theme-light .bg-amber-500 .text-white,
+.crm-theme-light .bg-orange-500 .text-white,
+.crm-theme-light .bg-blue-500 .text-white,
+.crm-theme-light .bg-blue-600 .text-white,
+.crm-theme-light .bg-primary .text-white,
+.crm-theme-light .bg-primary.text-white,
+.crm-theme-light .bg-destructive .text-white { color: #ffffff !important; }
+
+/* Borders */
+.crm-theme-light .border-white\/5,
+.crm-theme-light .border-white\/10,
+.crm-theme-light .border-white\/15,
+.crm-theme-light .border-white\/20 { border-color: var(--crm-border) !important; }
+
+/* Hover surfaces */
+.crm-theme-light .hover\:bg-white\/5:hover,
+.crm-theme-light .hover\:bg-white\/10:hover { background-color: rgba(7, 94, 84, 0.06) !important; }
+
+/* Inputs / chat composer */
+.crm-theme-light .dark\:bg-\[\#2a3942\] { background-color: #ffffff !important; }
+
+/* Sidebar itself (className on Sidebar element) */
+.crm-theme-light [data-sidebar="sidebar"] {
+  background-color: var(--crm-surface) !important;
+  color: var(--crm-text) !important;
+}
+
+/* Scrollbar tweak for light */
+.crm-theme-light ::-webkit-scrollbar-thumb { background: rgba(7, 94, 84, 0.2); }
+
+/* ============================================================
+   Light theme — coberturas adicionais (fundos/textos faltantes)
+   ============================================================ */
+
+/* Mais hex de fundos escuros usados em listas, tabelas e headers */
+.crm-theme-light .bg-\[\#232d36\],
+.crm-theme-light .bg-\[\#050508\],
+.crm-theme-light .bg-\[\#6a7175\],
+.crm-theme-light .bg-\[\#6b7b8d\] { background-color: var(--crm-surface) !important; }
+
+/* Variantes dark: comuns em rows de tabela / listas */
+.crm-theme-light .dark\:bg-\[\#1a2730\],
+.crm-theme-light .dark\:bg-\[\#0b141a\],
+.crm-theme-light .dark\:bg-\[\#232d36\],
+.crm-theme-light .dark\:bg-\[\#050508\],
+.crm-theme-light .dark\:bg-\[\#0a0a0a\],
+.crm-theme-light .dark\:bg-\[\#0a0f12\],
+.crm-theme-light .dark\:bg-\[\#0f1a1f\],
+.crm-theme-light .dark\:bg-\[\#1a1d21\],
+.crm-theme-light .dark\:bg-\[\#161c20\] { background-color: var(--crm-surface) !important; }
+
+/* Balões/cards que usam bg-white com texto branco por engano: força texto escuro
+   sobre qualquer superfície clara (white / surfaces) */
+.crm-theme-light .bg-white,
+.crm-theme-light .bg-white\/90,
+.crm-theme-light .bg-white\/95,
+.crm-theme-light .bg-\[\#ffffff\],
+.crm-theme-light .bg-\[\#fff\] { color: var(--crm-text) !important; }
+.crm-theme-light .bg-white .text-white,
+.crm-theme-light .bg-white\/90 .text-white,
+.crm-theme-light .bg-white\/95 .text-white,
+.crm-theme-light .bg-\[\#ffffff\] .text-white,
+.crm-theme-light .bg-\[\#F0FDF4\] .text-white,
+.crm-theme-light .bg-\[\#E8F5F1\] .text-white,
+.crm-theme-light .bg-\[\#f0f2f5\] .text-white,
+.crm-theme-light .bg-\[\#f5f6f6\] .text-white,
+.crm-theme-light .bg-\[\#dcf8c6\] .text-white,
+.crm-theme-light .bg-\[\#efeae2\] .text-white,
+.crm-theme-light .bg-\[\#dfe5e7\] .text-white,
+.crm-theme-light .bg-\[\#e5ddd5\] .text-white { color: var(--crm-text) !important; }
+
+/* Linhas de tabela / itens de lista de conversas: força texto legível mesmo
+   quando o componente seta text-white inline ou via class composta */
+.crm-theme-light table,
+.crm-theme-light table th,
+.crm-theme-light table td,
+.crm-theme-light tbody tr,
+.crm-theme-light thead tr { color: var(--crm-text) !important; }
+.crm-theme-light table tr { background-color: transparent !important; }
+.crm-theme-light table thead { background-color: var(--crm-surface-2) !important; }
+
+/* Labels e textos com cinza claro que somem em fundo claro */
+.crm-theme-light label,
+.crm-theme-light .text-muted-foreground,
+.crm-theme-light .text-gray-300,
+.crm-theme-light .text-gray-400,
+.crm-theme-light .text-slate-300,
+.crm-theme-light .text-slate-400,
+.crm-theme-light .text-zinc-300,
+.crm-theme-light .text-zinc-400,
+.crm-theme-light .text-neutral-300,
+.crm-theme-light .text-neutral-400 { color: var(--crm-text-soft) !important; }
+
+/* Mantém o texto branco nos botões/badges com fundo escuro adicionais */
+.crm-theme-light .bg-\[\#075E54\] .text-white,
+.crm-theme-light .bg-\[\#075e54\] .text-white,
+.crm-theme-light .bg-\[\#00875A\] .text-white,
+.crm-theme-light .bg-\[\#16A34A\] .text-white,
+.crm-theme-light .bg-\[\#22C55E\] .text-white,
+.crm-theme-light .bg-\[\#1465c8\] .text-white,
+.crm-theme-light .bg-\[\#1668d8\] .text-white,
+.crm-theme-light .bg-\[\#1877F2\] .text-white,
+.crm-theme-light .bg-\[\#4285F4\] .text-white,
+.crm-theme-light .bg-\[\#7c5cfc\] .text-white,
+.crm-theme-light .bg-\[\#EAB308\] .text-white { color: #ffffff !important; }
+
+/* Item ativo do menu no tema claro: fundo fica claro, então o texto não pode
+   ser branco. Mantém branco apenas em botões/superfícies realmente primárias. */
+.crm-theme-light [data-sidebar="menu-button"][data-active="true"],
+.crm-theme-light [data-sidebar="menu-button"][data-active="true"] * {
+  color: var(--crm-text-strong) !important;
+}
+.crm-theme-light [data-sidebar="menu-button"][data-active="true"] svg {
+  color: var(--crm-accent) !important;
+}
+.crm-theme-light .bg-primary,
+.crm-theme-light .bg-primary * { color: #ffffff !important; }
+
+/* Kanban horizontal scrollbar — always visible for lateral navigation */
+.kanban-scroll::-webkit-scrollbar {
+  height: 12px;
+  width: 12px;
+  -webkit-appearance: none;
+}
+.kanban-scroll::-webkit-scrollbar-track {
+  background: hsl(var(--muted) / 0.4);
+  border-radius: 8px;
+}
+.kanban-scroll::-webkit-scrollbar-thumb {
+  background: hsl(var(--primary) / 0.7);
+  border-radius: 8px;
+  border: 2px solid hsl(var(--muted) / 0.4);
+}
+.kanban-scroll::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary));
+}
+
+/* Flow bar horizontal scrollbar — thin visible scroll for rolagem mode */
+.flow-bar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--primary) / 0.6) transparent;
+}
+.flow-bar-scroll::-webkit-scrollbar {
+  height: 6px;
+  -webkit-appearance: none;
+}
+.flow-bar-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.flow-bar-scroll::-webkit-scrollbar-thumb {
+  background: hsl(var(--primary) / 0.6);
+  border-radius: 4px;
+}
+.flow-bar-scroll::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--primary));
+}

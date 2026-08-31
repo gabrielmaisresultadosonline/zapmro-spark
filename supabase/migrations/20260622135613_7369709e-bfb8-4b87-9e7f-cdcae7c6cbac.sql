@@ -1,0 +1,1 @@
+DELETE FROM public.crm_messages a USING public.crm_messages b WHERE a.id > b.id AND a.meta_message_id = b.meta_message_id AND a.user_id = b.user_id AND a.meta_message_id IS NOT NULL; CREATE UNIQUE INDEX IF NOT EXISTS crm_messages_user_meta_unique ON public.crm_messages (user_id, meta_message_id) WHERE meta_message_id IS NOT NULL;

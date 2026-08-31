@@ -1,0 +1,1 @@
+ALTER TABLE public.crm_flows ADD COLUMN IF NOT EXISTS trigger_tag TEXT;

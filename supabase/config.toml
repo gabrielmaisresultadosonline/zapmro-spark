@@ -1,0 +1,13 @@
+project_id = "uasmbabnmtvfrcasvmci"
+
+[functions.crm-central-admin]
+verify_jwt = false
+
+[functions.crm-sales-checkout]
+verify_jwt = false
+
+[functions.crm-sales-verify]
+verify_jwt = false
+
+[functions.exportar-tabela-vps]
+verify_jwt = false

@@ -1,0 +1,1 @@
+ALTER TABLE public.crm_google_accounts ADD COLUMN IF NOT EXISTS auto_sync boolean NOT NULL DEFAULT true;
