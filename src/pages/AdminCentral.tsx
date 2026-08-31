@@ -40,7 +40,11 @@ import {
   ChevronUp,
   Copy,
   Shield,
+  Lock,
+  Unlock,
 } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+
 
 type AdminUser = {
   id: string;
