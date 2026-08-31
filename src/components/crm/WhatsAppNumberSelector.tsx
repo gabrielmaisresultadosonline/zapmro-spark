@@ -11,6 +11,13 @@ import {
   type WhatsAppNumberRecord,
 } from "@/lib/whatsappNumbers";
 
+/** Contato do administrador para liberação de números extras. */
+const SUPPORT_WHATSAPP_URL =
+  "https://wa.me/5551992835863?text=" +
+  encodeURIComponent(
+    "Vim pelo site, estou precisando cadastrar mais um numero no ZAPMRO OFICIAL"
+  );
+
 export interface WhatsAppNumberSelectorProps {
   userId: string;
   maxNumbers: number;
@@ -38,6 +45,7 @@ export function WhatsAppNumberSelector({
   const [pinValue, setPinValue] = useState("");
   const [newPinTarget, setNewPinTarget] = useState<WhatsAppNumberRecord | null>(null);
   const [newPinValue, setNewPinValue] = useState("");
+  const [showLimit, setShowLimit] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -96,6 +104,7 @@ export function WhatsAppNumberSelector({
 
   const canConnectMore = numbers.length < maxNumbers;
 
+
   return (
     <div className="min-h-screen w-full flex items-center justify-center bg-gradient-to-br from-[#0c1317] via-[#111b21] to-[#0c1317] p-4 sm:p-6">
       <div className="w-full max-w-xl bg-[#202c33] rounded-2xl shadow-2xl border border-white/5 p-6 sm:p-8">
@@ -105,7 +114,9 @@ export function WhatsAppNumberSelector({
           </div>
           <h1 className="text-xl sm:text-2xl font-bold text-white">Qual WhatsApp você quer abrir?</h1>
           <p className="text-white/50 text-sm mt-2">
-            Este cadastro tem {maxNumbers} número(s) liberado(s). Escolha um para entrar nas conversas.
+            {maxNumbers > 1
+              ? `Seu plano tem ${maxNumbers} números liberados. Escolha um para entrar nas conversas.`
+              : "Seu cadastro tem 1 número liberado. Escolha-o para entrar nas conversas."}
           </p>
         </div>
 
@@ -169,23 +180,60 @@ export function WhatsAppNumberSelector({
 
             <button
               type="button"
-              onClick={onConnectNew}
-              disabled={!canConnectMore}
+              onClick={() => {
+                if (canConnectMore) {
+                  onConnectNew();
+                  return;
+                }
+                setShowLimit(true);
+              }}
               className={cn(
                 "w-full h-12 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition",
                 canConnectMore
                   ? "bg-[#1877F2] hover:bg-[#1465c8] text-white"
-                  : "bg-white/5 text-white/30 cursor-not-allowed"
+                  : "bg-white/5 text-white/40 hover:bg-white/10"
               )}
             >
-              <Plus className="w-4 h-4" />
+              {canConnectMore ? <Plus className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
               {canConnectMore
                 ? "Conectar mais um WhatsApp"
-                : "Limite de números atingido — fale com o suporte"}
+                : "Cadastrar número (limite atingido)"}
             </button>
           </div>
         )}
       </div>
+
+      {showLimit && (
+        <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4">
+          <div className="w-full max-w-sm bg-[#202c33] rounded-2xl border border-white/10 p-6 text-center">
+            <div className="w-14 h-14 mx-auto mb-4 rounded-full bg-white/5 flex items-center justify-center">
+              <Lock className="w-6 h-6 text-white/60" />
+            </div>
+            <h2 className="text-white font-bold text-lg mb-2">Limite do seu cadastro</h2>
+            <p className="text-white/60 text-sm mb-5">
+              Seu cadastro está disponível para {maxNumbers} número(s). Para liberar mais números,
+              entre em contato com nosso administrador.
+            </p>
+            <a
+              href={SUPPORT_WHATSAPP_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full h-11 rounded-xl bg-[#00a884] hover:bg-[#02916f] text-white text-sm font-semibold flex items-center justify-center gap-2 transition"
+            >
+              <MessageSquare className="w-4 h-4" />
+              Falar no WhatsApp
+            </a>
+            <button
+              type="button"
+              onClick={() => setShowLimit(false)}
+              className="w-full h-10 mt-2 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-semibold"
+            >
+              Fechar
+            </button>
+          </div>
+        </div>
+      )}
+
 
       {pinTarget && (
         <div className="fixed inset-0 z-[200] bg-black/70 flex items-center justify-center p-4">
