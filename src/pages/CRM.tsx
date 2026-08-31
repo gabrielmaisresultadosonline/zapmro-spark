@@ -4962,17 +4962,6 @@ const CRM = () => {
     <SidebarProvider>
       <div className={`h-[100dvh] w-full flex overflow-hidden bg-[#f0f2f5] dark:bg-[#0c1317] ${crmTheme === 'light' ? 'crm-theme-light' : ''}`}>
         <AnnouncementPopup />
-        {multiNumberEnabled && (
-          <button
-            type="button"
-            onClick={handleSwitchNumber}
-            title="Trocar de WhatsApp"
-            className="fixed top-2 right-2 z-[90] h-9 px-3 rounded-lg bg-[#00a884] hover:bg-[#02916f] text-white text-[11px] sm:text-xs font-bold uppercase tracking-wide shadow-lg flex items-center gap-1.5"
-          >
-            <LucideIcons.RefreshCw className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Trocar WhatsApp</span>
-          </button>
-        )}
         {whatsappDisconnected && (
           <div className="fixed top-0 left-0 right-0 z-[100] bg-red-600 text-white px-4 py-3 shadow-lg flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 text-sm font-medium">
@@ -5210,6 +5199,18 @@ const CRM = () => {
             </div>
             {activeTab === 'contacts' && (
               <div className="flex items-center gap-1.5 md:gap-3">
+                {multiNumberEnabled && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSwitchNumber}
+                    title="Trocar de WhatsApp"
+                    className="font-black h-8 px-2 md:px-3 text-[9px] md:text-xs rounded-full bg-white dark:bg-[#111b21] hover:bg-muted transition-all active:scale-95 shadow-sm whitespace-nowrap"
+                  >
+                    <LucideIcons.RefreshCw className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />
+                    TROCAR WHATSAPP
+                  </Button>
+                )}
                 <Button 
                   variant={activeFlowsView ? "default" : "outline"} 
                   size="sm" 
