@@ -2273,17 +2273,15 @@ const CRM = () => {
        try {
          const allowed = await fetchMaxWhatsAppNumbers(user.id);
          setMaxWhatsAppNumbers(allowed);
-         if (allowed > 1) {
-           const numbers = settingsData
-             ? await syncSettingsIntoNumbers(user.id, settingsData)
-             : await fetchUserNumbers(user.id);
-           setUserNumbersCount(numbers.length);
-           const stored = getActiveNumberId(user.id);
-           const validStored = stored && numbers.some((n) => n.id === stored) ? stored : null;
-           setActiveNumberId(validStored);
-         } else {
-           setActiveNumberId(null);
-         }
+         // Vale para 1 ou mais números: mantém a escolha já feita para não
+         // voltar ao seletor em loop após clicar em "Abrir".
+         const numbers = settingsData
+           ? await syncSettingsIntoNumbers(user.id, settingsData)
+           : await fetchUserNumbers(user.id);
+         setUserNumbersCount(numbers.length);
+         const stored = getActiveNumberId(user.id);
+         const validStored = stored && numbers.some((n) => n.id === stored) ? stored : null;
+         setActiveNumberId(validStored);
        } catch (multiError) {
          console.warn('[CRM] multi-whatsapp indisponível:', multiError);
        }
