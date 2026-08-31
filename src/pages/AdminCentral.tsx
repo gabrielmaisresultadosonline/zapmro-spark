@@ -228,7 +228,7 @@ function ReportStat({
  */
 type DumpFile = { name: string; content: string };
 
-function MigrationPanel({ creds }: { creds: { email: string; password: string } }) {
+function MigrationPanel({ creds }: { creds: AdminCreds }) {
   const [dumping, setDumping] = useState(false);
   const [progress, setProgress] = useState<DumpProgress | null>(null);
   const [dumpResult, setDumpResult] = useState<{
@@ -248,14 +248,15 @@ function MigrationPanel({ creds }: { creds: { email: string; password: string } 
     setDumpResult(null);
     setProgress({ phase: "Conectando...", current: 0, total: 100, detail: "" });
 
+    // Exportação tem orçamento de tempo próprio (mais longo), mas ainda finito:
+    // se um bloco travar, a tela informa o erro em vez de ficar carregando.
     const call = async (payload: Record<string, unknown>) => {
-      const { data, error } = await supabase.functions.invoke("crm-central-admin", {
-        body: { ...payload, adminEmail: creds.email, adminPassword: creds.password },
-      });
-      if (error) throw new Error(error.message || "Falha na comunicação com o servidor");
-      if (!data?.success) throw new Error(data?.error || "Erro ao gerar dump");
-      return data as any;
+      const { action, ...extra } = payload as any;
+      return (await adminCall(String(action), creds, extra, {
+        timeoutMs: ADMIN_TIMEOUTS.export,
+      })) as any;
     };
+
 
     try {
       setProgress({ phase: "Mapeando estrutura...", current: 5, total: 100, detail: "Tabelas, funções, RLS" });
