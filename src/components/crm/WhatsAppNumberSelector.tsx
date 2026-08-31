@@ -38,6 +38,7 @@ export function WhatsAppNumberSelector({
   const [pinValue, setPinValue] = useState("");
   const [newPinTarget, setNewPinTarget] = useState<WhatsAppNumberRecord | null>(null);
   const [newPinValue, setNewPinValue] = useState("");
+  const [showLimit, setShowLimit] = useState(false);
 
   const load = async () => {
     setLoading(true);
