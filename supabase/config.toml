@@ -3,6 +3,9 @@ project_id = "uasmbabnmtvfrcasvmci"
 [functions.crm-central-admin]
 verify_jwt = false
 
+[functions.crm-central-admin-login]
+verify_jwt = false
+
 [functions.crm-sales-checkout]
 verify_jwt = false
 

@@ -149,6 +149,42 @@ async function invokeAdminFn(body: Record<string, unknown>, timeoutMs = 30000): 
   throw new Error("Resposta vazia do servidor");
 }
 
+/**
+ * O login usa uma função mínima para não precisar inicializar o módulo
+ * administrativo completo. Em instalações ainda não atualizadas, mantém
+ * compatibilidade usando a função antiga como fallback.
+ */
+async function invokeAdminLogin(email: string, password: string) {
+  const baseUrl = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.replace(/\/+$/, "");
+  const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+
+  if (!baseUrl) {
+    return invokeAdminFn({ action: "login", adminEmail: email, adminPassword: password }, 12000);
+  }
+
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 12000);
+  try {
+    const response = await fetch(`${baseUrl}/functions/v1/crm-central-admin-login`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(anonKey ? { apikey: anonKey, Authorization: `Bearer ${anonKey}` } : {}),
+      },
+      body: JSON.stringify({ adminEmail: email, adminPassword: password }),
+      signal: controller.signal,
+    });
+    const payload: unknown = await response.json();
+    if (payload && typeof payload === "object") return payload;
+    throw new Error("Resposta inválida do servidor");
+  } catch (error) {
+    console.warn("[AdminCentral] login rápido indisponível, usando compatibilidade:", error);
+    return invokeAdminFn({ action: "login", adminEmail: email, adminPassword: password }, 12000);
+  } finally {
+    window.clearTimeout(timer);
+  }
+}
+
 
 
 function ReportStat({
@@ -731,7 +767,7 @@ export default function AdminCentral() {
     }
     setLoggingIn(true);
     try {
-      const data = await invokeAdminFn({ action: "login", adminEmail: email, adminPassword: password });
+      const data = await invokeAdminLogin(email, password);
       if (!data?.success) throw new Error(data?.error || "Credenciais inválidas");
       const c = { email, password };
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(c));
