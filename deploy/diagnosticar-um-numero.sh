@@ -166,11 +166,31 @@ while IFS='|' read -r email label pnid waba token nid; do
       elif [ "$(echo "$s" | jq '.data | length')" = "0" ]; then
         c_err "  WEBHOOK NÃO ASSINADO -> é exatamente por isso que não chega mensagem."
         echo   "  corrigir agora:"
-        echo   "     curl -X POST 'https://graph.facebook.com/v21.0/${waba}/subscribed_apps' -H 'Authorization: Bearer <TOKEN_DESTA_CAIXA>'"
+        echo   "     ./deploy/reparar-coexistencia.sh ${pnid}"
       else
         c_ok "  assinado por: $(echo "$s" | jq -r '[.data[].whatsapp_business_api_data.name] | join(", ")')"
       fi
     fi
+
+    # Coexistência (SMB): sem os campos smb_* assinados no APP, nada chega.
+    CVS="$(echo "$r" | jq -r '.code_verification_status // "?"')"
+    if [ "$CVS" = "NOT_VERIFIED" ]; then
+      c_warn "  code_verification_status=NOT_VERIFIED -> provável COEXISTÊNCIA (SMB)."
+      APP_ID_ENV="${FACEBOOK_APP_ID:-}"
+      APP_SECRET_ENV="${FACEBOOK_APP_SECRET:-}"
+      if [ -n "$APP_ID_ENV" ] && [ -n "$APP_SECRET_ENV" ]; then
+        FIELDS_NOW="$(curl -s -m 20 "https://graph.facebook.com/v21.0/${APP_ID_ENV}/subscriptions?access_token=${APP_ID_ENV}|${APP_SECRET_ENV}" \
+          | jq -r '[.data[]? | select(.object=="whatsapp_business_account") | .fields[]?.name] | join(",")')"
+        echo "  campos assinados no app: ${FIELDS_NOW:-(nenhum)}"
+        case "$FIELDS_NOW" in
+          *smb_message_echoes*) c_ok "  smb_message_echoes OK" ;;
+          *) c_err "  FALTA smb_message_echoes -> rode: ./deploy/reparar-coexistencia.sh ${pnid}" ;;
+        esac
+      else
+        c_warn "  FACEBOOK_APP_ID/SECRET ausentes no .env — não pude checar os campos do app."
+      fi
+    fi
+
   fi
 
   titulo "4) Tráfego já registrado nesta caixa"
