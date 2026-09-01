@@ -907,7 +907,20 @@ ${aiPrompt}
 
 // Save a message echo (sent from the WhatsApp Business mobile app/desktop) as
 // an outbound message in the CRM so both sides of the conversation stay in sync.
-async function saveOutboundEcho(supabase: any, userId: string, echo: any, businessPhone: string) {
+async function saveOutboundEcho(
+  supabase: any,
+  userId: string,
+  echo: any,
+  businessPhone: string,
+  /** Caixa (número) que enviou este eco. Mantém o histórico separado por número. */
+  whatsappNumberId: string | null = null,
+  /** Token do próprio número, usado para baixar mídia sem depender do número principal. */
+  numberAccessToken: string | null = null,
+) {
+  const echoScope = <T,>(query: T): T =>
+    whatsappNumberId ? ((query as any).eq('whatsapp_number_id', whatsappNumberId) as T) : query;
+  const echoNumberPatch = whatsappNumberId ? { whatsapp_number_id: whatsappNumberId } : {};
+
   try {
     const metaMessageId = echo?.id;
     // The recipient (customer) — Meta puts the customer in `to` for echoes.
