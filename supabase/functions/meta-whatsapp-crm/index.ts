@@ -1087,13 +1087,71 @@ async function saveOutboundEcho(
   }
 }
 
+/**
+ * Coexistência (SMB): a Meta entrega os mesmos eventos com OUTROS nomes de campo.
+ *   - field `smb_message_echoes`  -> value.smb_message_echoes  (enviadas pelo celular)
+ *   - field `history`             -> value.history[].threads[].messages (sync inicial)
+ *   - field `smb_app_state_sync`  -> apenas estado/contatos (nada a persistir aqui)
+ * Normalizamos para o formato canônico (`message_echoes` / `messages`) para que
+ * TODO o restante do handler continue funcionando sem duplicação de lógica.
+ */
+function normalizeSmbWebhookEntries(entries: any[]): any[] {
+  return entries.map((entryItem: any) => {
+    if (!Array.isArray(entryItem?.changes)) return entryItem;
+    const changes = entryItem.changes.map((change: any) => {
+      const field = String(change?.field || '');
+      const value = { ...(change?.value || {}) };
+
+      // 1) Echoes de coexistência
+      const smbEchoes = Array.isArray((value as any).smb_message_echoes)
+        ? (value as any).smb_message_echoes
+        : [];
+      if (smbEchoes.length > 0) {
+        value.message_echoes = [...(Array.isArray(value.message_echoes) ? value.message_echoes : []), ...smbEchoes];
+        delete (value as any).smb_message_echoes;
+        console.log('[WEBHOOK-SMB] Echoes de coexistência normalizados', { count: smbEchoes.length, field });
+      }
+
+      // 2) Histórico inicial (threads) -> messages
+      if (Array.isArray((value as any).history)) {
+        const historyMessages: any[] = [];
+        for (const bucket of (value as any).history) {
+          for (const thread of (Array.isArray(bucket?.threads) ? bucket.threads : [])) {
+            for (const msg of (Array.isArray(thread?.messages) ? thread.messages : [])) {
+              if (msg && typeof msg === 'object') historyMessages.push(msg);
+            }
+          }
+        }
+        if (historyMessages.length > 0) {
+          value.messages = [...(Array.isArray(value.messages) ? value.messages : []), ...historyMessages];
+          console.log('[WEBHOOK-SMB] Histórico normalizado', { count: historyMessages.length });
+        }
+        delete (value as any).history;
+      }
+
+      // 3) Estado do app: só log (não há mensagem para persistir)
+      if (/smb_app_state_sync/i.test(field)) {
+        console.log('[WEBHOOK-SMB] app_state_sync recebido', {
+          phone_number_id: value?.metadata?.phone_number_id || null,
+        });
+      }
+
+      const normalizedField = /smb_message_echoes/i.test(field) ? 'message_echoes' : change?.field;
+      return { ...change, field: normalizedField, value };
+    });
+    return { ...entryItem, changes };
+  });
+}
+
 async function handleProcessWebhook(supabase: any, entry: any, skipSave = false, userId?: string) {
-  const entries = Array.isArray(entry) ? entry : (entry ? [entry] : []);
+  const rawEntries = Array.isArray(entry) ? entry : (entry ? [entry] : []);
+  const entries = normalizeSmbWebhookEntries(rawEntries);
   const changes = entries.flatMap((entryItem: any) =>
     Array.isArray(entryItem?.changes)
       ? entryItem.changes.map((change: any) => ({ entryItem, change }))
       : []
   );
+
 
   const shouldSplitPayload = changes.length > 1 || changes.some(({ change }: any) => {
     const value = change?.value || {};
@@ -3958,30 +4016,69 @@ async function ensureMetaAppWebhookConfigured() {
   }
 
   const callbackUrl = `${baseUrl}/functions/v1/meta-whatsapp-crm`;
-  const form = new URLSearchParams();
-  form.set('object', 'whatsapp_business_account');
-  form.set('callback_url', callbackUrl);
-  // "message_echoes" requires permissions that are not granted in every Meta app.
-  // If we request it together with "messages", Meta rejects the whole webhook subscription
-  // and inbound conversations stop arriving. Keep the required field minimal.
-  form.set('fields', 'messages');
-  form.set('verify_token', getGlobalWebhookVerifyToken());
-  form.set('access_token', `${APP_ID}|${APP_SECRET}`);
 
-  try {
+  // Coexistência (SMB) só entrega conversas se os campos smb_* estiverem assinados.
+  // Alguns apps Meta não têm permissão para eles: se a Meta recusar o conjunto
+  // completo, refazemos a inscrição apenas com "messages" — nunca deixamos o
+  // recebimento das outras caixas quebrado por causa de um campo extra.
+  const fieldSets = [
+    'messages,smb_message_echoes,smb_app_state_sync,history,message_template_status_update',
+    'messages,smb_message_echoes,smb_app_state_sync,history',
+    'messages,smb_message_echoes',
+    'messages',
+  ];
+
+  const subscribeWithFields = async (fields: string) => {
+    const form = new URLSearchParams();
+    form.set('object', 'whatsapp_business_account');
+    form.set('callback_url', callbackUrl);
+    form.set('fields', fields);
+    form.set('verify_token', getGlobalWebhookVerifyToken());
+    form.set('access_token', `${APP_ID}|${APP_SECRET}`);
+
     const res = await fetch(`https://graph.facebook.com/v25.0/${APP_ID}/subscriptions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
     });
     const json = await res.json().catch(() => ({}));
-    console.log('[META WEBHOOK] app subscription response', { ok: res.ok, status: res.status, success: json?.success || null, error: json?.error?.message || null });
-    return { success: res.ok, status: res.status, result: json, callback_url: callbackUrl };
+    console.log('[META WEBHOOK] app subscription response', {
+      ok: res.ok,
+      status: res.status,
+      fields,
+      success: json?.success || null,
+      error: json?.error?.message || null,
+    });
+    return { ok: res.ok && json?.success !== false, status: res.status, json };
+  };
+
+  try {
+    let last: { ok: boolean; status: number; json: any } | null = null;
+    for (const fields of fieldSets) {
+      last = await subscribeWithFields(fields);
+      if (last.ok) {
+        return {
+          success: true,
+          status: last.status,
+          result: last.json,
+          callback_url: callbackUrl,
+          subscribed_fields: fields,
+        };
+      }
+    }
+    return {
+      success: false,
+      status: last?.status ?? 0,
+      result: last?.json ?? {},
+      callback_url: callbackUrl,
+      subscribed_fields: null,
+    };
   } catch (e: any) {
     console.error('[META WEBHOOK] app subscription failed', { message: e?.message || String(e) });
     return { success: false, error: e?.message || String(e) };
   }
 }
+
 
 function getWebhookRepairError(appWebhook: any, wabaSubscription: any) {
   const appError = appWebhook?.result?.error || {};

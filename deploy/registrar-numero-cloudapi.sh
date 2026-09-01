@@ -120,16 +120,24 @@ if echo "$r" | jq -e '.error' >/dev/null 2>&1; then
    4) Depois, reconfirmar com:
           ./deploy/diagnosticar-um-numero.sh <PHONE_NUMBER_ID>
 
+  ATALHO: o passo (1) + reassinatura da WABA já é automatizado por:
+       ./deploy/reparar-coexistencia.sh <PHONE_NUMBER_ID>
+
   Alternativa definitiva (recomendada se ele quer só CRM):
       migrar o número de verdade para a Cloud API (deixa de funcionar no app):
       excluir o número da conta SMB e adicioná-lo pelo WhatsApp Manager como
       número da Cloud API — aí o /register com PIN passa a funcionar.
 FIM
-    titulo "Reassinando o webhook nesta WABA (idempotente)"
-    WABA="$(q1 "select coalesce(meta_waba_id,'') from public.crm_whatsapp_numbers where meta_phone_number_id = '$PNID' limit 1")"
-    [ -n "$WABA" ] && curl -s -m 25 -X POST "$API/$WABA/subscribed_apps" -H "Authorization: Bearer $TOKEN" | jq .
+    titulo "Executando o reparo de coexistência agora"
+    if [ -x "$(dirname "$0")/reparar-coexistencia.sh" ]; then
+      "$(dirname "$0")/reparar-coexistencia.sh" "$PNID" || true
+    else
+      WABA="$(q1 "select coalesce(meta_waba_id,'') from public.crm_whatsapp_numbers where meta_phone_number_id = '$PNID' limit 1")"
+      [ -n "$WABA" ] && curl -s -m 25 -X POST "$API/$WABA/subscribed_apps" -H "Authorization: Bearer $TOKEN" | jq .
+    fi
     exit 0
   fi
+
 
   c_err "registro falhou: $MSG (subcode ${SUB:-n/a})"
   cat <<'FIM'
