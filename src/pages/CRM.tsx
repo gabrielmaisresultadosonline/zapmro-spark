@@ -8341,10 +8341,21 @@ const CRM = () => {
                                 <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
                                   <LucideIcons.Mail className="w-3.5 h-3.5 text-primary" />
                                 </div>
-                                <span className="text-xs font-medium truncate" title={acc.email}>
-                                  {acc.email}
-                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-xs font-medium truncate block" title={acc.email}>
+                                    {acc.email}
+                                  </span>
+                                  {acc.connection_status && acc.connection_status !== 'active' && (
+                                    <span
+                                      className="text-[10px] font-bold text-destructive truncate block"
+                                      title={acc.last_sync_error || 'Reconecte esta conta autorizando o acesso aos Contatos.'}
+                                    >
+                                      ⚠ Reconexão necessária
+                                    </span>
+                                  )}
+                                </div>
                               </div>
+
                               <div className="flex items-center gap-2 flex-shrink-0">
                                 <Button
                                   variant="outline"
