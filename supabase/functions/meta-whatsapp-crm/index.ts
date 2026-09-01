@@ -5613,11 +5613,30 @@ async function fetchAndStoreIncomingMedia(
       const normalizedTo = normalizePhone(params.to);
       const variants = getBrazilianPhoneVariants(normalizedTo);
 
-      const { data: contactRows } = await supabase
-        .from('crm_contacts')
-        .select('*')
-        .in('wa_id', variants)
-        .eq('user_id', userId)
+      // Multi-número: a conversa pertence a UMA caixa. Se o app não mandou o
+      // número aberto, resolvemos pelo phone_number_id que será usado no envio.
+      // Sem isso, um cadastro com 2 números gravava a mensagem no contato da
+      // outra caixa e ela nunca aparecia no chat aberto.
+      const sendPhoneNumberId =
+        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id;
+      let sendNumberId: string | null = scopedNumberId;
+      if (!sendNumberId && sendPhoneNumberId) {
+        const numberRowForSend = await getWhatsAppNumberByPhoneId(supabase, sendPhoneNumberId);
+        if (numberRowForSend && (!userId || numberRowForSend.user_id === userId)) {
+          sendNumberId = numberRowForSend.id;
+        }
+      }
+      const sendScope = <T,>(query: T): T =>
+        sendNumberId ? ((query as any).eq('whatsapp_number_id', sendNumberId) as T) : query;
+      const sendNumberPatch = sendNumberId ? { whatsapp_number_id: sendNumberId } : {};
+
+      const { data: contactRows } = await sendScope(
+        supabase
+          .from('crm_contacts')
+          .select('*')
+          .in('wa_id', variants)
+          .eq('user_id', userId)
+      )
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1);
       let contact: any = contactRows && contactRows.length > 0 ? contactRows[0] : null;
@@ -5625,17 +5644,18 @@ async function fetchAndStoreIncomingMedia(
       if (!contact && userId) {
         const insertResult = await supabase
           .from('crm_contacts')
-          .insert({ wa_id: canonicalBrazilianWaId(normalizedTo), name: canonicalBrazilianWaId(normalizedTo), user_id: userId, status: 'new', source_type: 'manual_send' })
+          .insert({ wa_id: canonicalBrazilianWaId(normalizedTo), name: canonicalBrazilianWaId(normalizedTo), user_id: userId, status: 'new', source_type: 'manual_send', ...sendNumberPatch })
           .select('*')
           .maybeSingle();
         if (insertResult.error) {
           // Pode ser corrida ou variante já existente — reaproveita a conversa existente.
-          const { data: retryRows } = await supabase
-            .from('crm_contacts')
-            .select('*')
-            .in('wa_id', variants)
-            .eq('user_id', userId)
-            .limit(1);
+          const { data: retryRows } = await sendScope(
+            supabase
+              .from('crm_contacts')
+              .select('*')
+              .in('wa_id', variants)
+              .eq('user_id', userId)
+          ).limit(1);
           contact = retryRows && retryRows.length > 0 ? retryRows[0] : null;
           if (!contact) console.error('[ACTION] Failed to create contact:', insertResult.error.message);
         } else {
@@ -5649,17 +5669,21 @@ async function fetchAndStoreIncomingMedia(
       }
         
       const finalUserId = userId || contact?.user_id || null;
-      console.log(`[ACTION] Usando userId ${finalUserId} para sendMessage`);
+      console.log(`[ACTION] Usando userId ${finalUserId} para sendMessage`, {
+        whatsapp_number_id: sendNumberId,
+        contact_id: contact?.id || null,
+      });
 
       const response = await handleInternalSendMessage(
         supabase, 
-        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id, 
+        sendPhoneNumberId,
         meta_access_token || settings?.meta_access_token || params.meta_access_token, 
-        params, 
+        { ...params, whatsapp_number_id: sendNumberId || params.whatsapp_number_id || null },
         contact, 
         settings?.vps_transcoder_url,
         finalUserId
       );
+
       console.log(`[ACTION] sendMessage finalizado para ${params.to}. Status: ${response.status}`);
       return response;
     }
