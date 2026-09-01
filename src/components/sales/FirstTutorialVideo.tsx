@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { resolveMediaUrl } from "@/lib/mediaUrl";
+import { prefetchVideo, videoPrefetchHandlers } from "@/lib/videoPrefetch";
 import { BadgeCheck, PlayCircle, X, Loader2 } from "lucide-react";
 
 type Tutorial = {
