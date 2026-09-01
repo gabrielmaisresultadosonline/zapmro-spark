@@ -19,6 +19,22 @@ interface ErrorExplanation {
 }
 
 const ERROR_DICTIONARY: Record<string, ErrorExplanation> = {
+  META_TEMPLATE_NOT_APPROVED: {
+    title: "Template não aprovado pela Meta",
+    reason:
+      "O disparo usou um template que não está com status APPROVED (está PENDING, REJECTED, PAUSED ou DISABLED). A Meta não entrega template não aprovado e devolve um erro genérico — que antes era exibido como 'saldo insuficiente'.",
+    fix:
+      "Abra Templates, confira o status na Meta e aguarde a aprovação (normalmente minutos a algumas horas). Se estiver REJECTED, corrija o conteúdo e reenvie para revisão. Só dispare quando o status estiver APROVADO.",
+    icon: <ShieldAlert className="w-4 h-4 text-yellow-400" />,
+  },
+  "132001": {
+    title: "Template inexistente ou não aprovado",
+    reason:
+      "A Meta não encontrou o template com esse nome/idioma nesta conta comercial, ou ele ainda não foi aprovado.",
+    fix: "Sincronize os templates, confirme nome + idioma (pt_BR) e use apenas templates com status APROVADO.",
+    icon: <AlertTriangle className="w-4 h-4 text-yellow-400" />,
+  },
+
   "131026": {
     title: "Mensagem não entregue (Undeliverable)",
     reason:
