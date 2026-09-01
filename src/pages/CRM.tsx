@@ -3158,19 +3158,21 @@ const CRM = () => {
         
         const { data: { user: bulkUser } } = await supabase.auth.getUser();
         for (const num of contactsToProcess) {
-          let { data: contact } = await supabase
-            .from('crm_contacts')
-            .select('id')
-            .eq('wa_id', num)
-            .eq('user_id', bulkUser?.id ?? '')
-            .maybeSingle();
+          let { data: contact } = await scopeToNumber(
+            supabase
+              .from('crm_contacts')
+              .select('id')
+              .eq('wa_id', num)
+              .eq('user_id', bulkUser?.id ?? '')
+          ).maybeSingle();
           if (!contact) {
             const { data: newContact, error: createError } = await supabase.from('crm_contacts').insert({
               wa_id: num,
               name: num,
               user_id: bulkUser?.id,
               status: 'new',
-              source_type: 'bulk_import'
+              source_type: 'bulk_import',
+              ...numberScopePatch(),
             }).select().single();
             if (!createError && newContact) contact = newContact;
           }
@@ -3287,12 +3289,13 @@ const CRM = () => {
     try {
       // 1. Garantir que o contato existe ou criar um temporário/persistente
       const { data: { user: bdayUser } } = await supabase.auth.getUser();
-      let { data: contact } = await supabase
-        .from('crm_contacts')
-        .select('id')
-        .eq('wa_id', birthdayNumber)
-        .eq('user_id', bdayUser?.id ?? '')
-        .maybeSingle();
+      let { data: contact } = await scopeToNumber(
+        supabase
+          .from('crm_contacts')
+          .select('id')
+          .eq('wa_id', birthdayNumber)
+          .eq('user_id', bdayUser?.id ?? '')
+      ).maybeSingle();
       
       if (!contact) {
         const { data: newContact, error: createError } = await supabase.from('crm_contacts').insert({
@@ -3300,7 +3303,8 @@ const CRM = () => {
           name: birthdayName,
           user_id: bdayUser?.id,
           status: 'new',
-          source_type: 'system'
+          source_type: 'system',
+          ...numberScopePatch(),
         }).select().single();
         if (createError) throw createError;
         contact = newContact;
@@ -4561,10 +4565,13 @@ const CRM = () => {
           status: contact.status || 'new',
           source_type: 'imported',
           metadata: contact.metadata || {},
-          last_interaction: null
+          last_interaction: null,
+          ...numberScopePatch(),
         }));
 
-        const { error } = await supabase.from('crm_contacts').upsert(batch, { onConflict: 'wa_id,user_id' });
+        const { error } = await supabase.from('crm_contacts').upsert(batch, {
+          onConflict: activeNumberIdRef.current ? 'wa_id,user_id,whatsapp_number_id' : 'wa_id,user_id',
+        });
         if (!error) {
           successCount += batch.length;
           // Atualiza a lista periodicamente para feedback visual
