@@ -4936,7 +4936,17 @@ const CRM = () => {
     lastContactsSyncRef.current = null;
     setActiveNumberId(null);
   };
-  if (!loading && multiNumberEnabled && currentUserId && !activeNumberId) {
+  // Se o cadastro já tem números salvos, NUNCA forçamos o Embedded Signup:
+  // mostramos o seletor para o usuário escolher um número existente (ou
+  // conectar outro, se quiser). Isso cobre o caso de desconectar um número
+  // estando em um cadastro com dois números.
+  const hasSavedNumbers = userNumbersCount > 0;
+  if (
+    !loading &&
+    multiNumberEnabled &&
+    currentUserId &&
+    (!activeNumberId || (!isWhatsAppConnected && hasSavedNumbers))
+  ) {
     return (
       <WhatsAppNumberSelector
         userId={currentUserId}
@@ -4952,6 +4962,19 @@ const CRM = () => {
           contactsSeededRef.current = false;
           lastContactsSyncRef.current = null;
           setActiveNumberId(record.id);
+          // Reflete de imediato as credenciais do número escolhido para o gate
+          // de conexão não voltar a aparecer enquanto o reload não terminar.
+          setMetaSettings((prev: any) => ({
+            ...prev,
+            meta_access_token: record.meta_access_token || '',
+            meta_phone_number_id: record.meta_phone_number_id || '',
+            meta_waba_id: record.meta_waba_id || '',
+            meta_display_phone_number: record.meta_display_phone_number || '',
+            meta_verified_name: record.meta_verified_name || '',
+          }));
+          setWhatsAppConnectionConfirmed(
+            !!(record.meta_access_token && record.meta_phone_number_id && record.meta_waba_id)
+          );
           void fetchData(true);
         }}
         onConnectNew={startEmbeddedSignup}
@@ -9065,6 +9088,7 @@ const CRM = () => {
                                   try {
                                     const { data: { user } } = await supabase.auth.getUser();
                                     if (!user) return;
+                                    const disconnectedPhoneId = metaSettings.meta_phone_number_id || null;
                                     const cleared = {
                                       meta_access_token: '',
                                       meta_phone_number_id: '',
@@ -9077,9 +9101,37 @@ const CRM = () => {
                                       .update({ ...cleared, updated_at: new Date().toISOString() })
                                       .eq('user_id', user.id);
                                     if (error) throw error;
+                                    // Desconectar remove SOMENTE a caixa atual da lista de números.
+                                    // Os outros números do cadastro continuam disponíveis no seletor.
+                                    let remaining = 0;
+                                    if (disconnectedPhoneId) {
+                                      const { error: numberError } = await supabase
+                                        .from('crm_whatsapp_numbers' as any)
+                                        .delete()
+                                        .eq('user_id', user.id)
+                                        .eq('meta_phone_number_id', disconnectedPhoneId);
+                                      if (numberError) {
+                                        console.warn('[CRM] não foi possível remover o número desconectado:', numberError.message);
+                                      }
+                                    }
+                                    try {
+                                      const numbers = await fetchUserNumbers(user.id);
+                                      remaining = numbers.length;
+                                      setUserNumbersCount(remaining);
+                                    } catch {
+                                      /* lista indisponível — segue com o gate padrão */
+                                    }
                                     setMetaSettings((prev: any) => ({ ...prev, ...cleared }));
                                     setWhatsAppConnectionConfirmed(false);
-                                    toast({ title: 'WhatsApp desconectado', description: 'Agora você pode conectar um novo número.' });
+                                    // Volta ao seletor: o usuário escolhe outro número já salvo
+                                    // ou conecta um novo, sem ser forçado ao Embedded Signup.
+                                    handleSwitchNumber();
+                                    toast({
+                                      title: 'WhatsApp desconectado',
+                                      description: remaining > 0
+                                        ? 'Escolha outro número do seu cadastro ou conecte um novo.'
+                                        : 'Agora você pode conectar um novo número.',
+                                    });
                                   } catch (err: any) {
                                     console.error('[CRM] disconnect whatsapp error:', err);
                                     toast({ title: 'Erro ao desconectar', description: err?.message || 'Tente novamente.', variant: 'destructive' });
