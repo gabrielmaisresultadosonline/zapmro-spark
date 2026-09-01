@@ -47,7 +47,10 @@ export default function FirstTutorialVideo({
     <>
       <button
         type="button"
+        {...videoPrefetchHandlers(resolveMediaUrl(video.video_url))}
         onClick={() => {
+          // Pré-aquece o início do arquivo antes do modal montar o <video>.
+          prefetchVideo(resolveMediaUrl(video.video_url));
           setVideoLoading(true);
           setOpen(true);
         }}
