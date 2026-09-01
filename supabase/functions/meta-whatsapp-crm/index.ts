@@ -6056,6 +6056,13 @@ async function fetchAndStoreIncomingMedia(
          .eq('email', email)
          .maybeSingle();
 
+       // Valide os escopos REALMENTE concedidos. Sem isso, uma conta sem
+       // permissão de Contatos é salva como "conectada" e depois falha com
+       // 403 a cada minuto no cron.
+       const grantedScopes = await checkGoogleTokenScopes(tokens.access_token);
+       const hasContactsWrite = hasGoogleContactsWriteScope(grantedScopes);
+       const scopeOk = hasContactsWrite !== false; // null = não verificável
+
        // Store in crm_google_accounts. Google may omit refresh_token on repeated consent,
        // so preserve the previous one instead of overwriting it with null/undefined.
        const { data: account, error: accError } = await supabase
@@ -6067,16 +6074,36 @@ async function fetchAndStoreIncomingMedia(
            expiry_date: Date.now() + (tokens.expires_in * 1000),
            updated_at: new Date().toISOString(),
            user_id: userId,
-           auto_sync: existingAccount?.auto_sync ?? true,
+           auto_sync: scopeOk ? (existingAccount?.auto_sync ?? true) : false,
+           connection_status: scopeOk ? 'active' : 'reconnect_required',
+           granted_scopes: grantedScopes ? grantedScopes.join(' ') : null,
+           last_sync_error_code: scopeOk ? null : 'INSUFFICIENT_SCOPE',
+           last_sync_error: scopeOk
+             ? null
+             : 'A permissão de Contatos do Google não foi concedida. Reconecte e marque a caixa de acesso aos Contatos.',
+           last_sync_error_at: scopeOk ? null : new Date().toISOString(),
          }, { onConflict: 'user_id, email' })
          .select()
          .single();
 
       if (accError) throw accError;
 
+      if (!scopeOk) {
+        console.error(`[OAUTH] Conta ${email} conectada SEM escopo de Contatos. Escopos: ${grantedScopes?.join(' ')}`);
+        return new Response(JSON.stringify({
+          success: false,
+          requiresReconnect: true,
+          account,
+          error: 'A permissão de Contatos do Google não foi concedida. Reconecte a conta e autorize o acesso aos Contatos.',
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
       return new Response(JSON.stringify({ success: true, account }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+
     }
 
     if (action === 'syncGoogleContacts') {
