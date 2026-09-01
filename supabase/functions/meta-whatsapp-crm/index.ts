@@ -2888,6 +2888,17 @@ async function pushPendingContactsToGoogle(supabase: any, userId: string, settin
       continue;
     }
 
+    // A conta respondeu bem: limpe qualquer marcação antiga de erro.
+    if (account.connection_status && account.connection_status !== 'active') {
+      await supabase.from('crm_google_accounts').update({
+        connection_status: 'active',
+        last_sync_error_code: null,
+        last_sync_error: null,
+        last_sync_error_at: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', account.id);
+    }
+
 
     const alreadyOnGoogle = forThisAccount.filter((contact: any) =>
       googleContactsByPhone.has(canonicalBrazilianWaId(contact.wa_id))
