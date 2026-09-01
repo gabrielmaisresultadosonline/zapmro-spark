@@ -2,6 +2,7 @@
 import { createClient } from '@supabase/supabase-js';
 import type { Database } from './types';
 import { brokeredPreviewStorage } from './previewAuthStorage';
+import { getActiveWhatsAppNumberId } from '@/lib/activeNumberContext';
 
 /**
  * As credenciais chegam por variáveis de ambiente (.env / painel de deploy).
@@ -38,3 +39,34 @@ export const supabase = createClient<Database>(
     },
   }
 );
+
+/**
+ * Multi-WhatsApp: todo `functions.invoke` passa a carregar o número aberto
+ * (`whatsapp_number_id`). Assim o servidor usa as credenciais daquele número
+ * — nunca as do último número ativado — e cada caixa de entrada permanece
+ * independente. Feito em um único ponto para não depender de cada chamada.
+ */
+const originalInvoke = supabase.functions.invoke.bind(supabase.functions);
+(supabase.functions as any).invoke = (
+  functionName: string,
+  options: Record<string, any> = {}
+) => {
+  const numberId = getActiveWhatsAppNumberId();
+  const body = options?.body;
+  const canInject =
+    !!numberId &&
+    body !== null &&
+    typeof body === 'object' &&
+    !(body instanceof FormData) &&
+    !(body instanceof Blob) &&
+    !(body instanceof ArrayBuffer) &&
+    !Array.isArray(body) &&
+    (body as any).whatsapp_number_id === undefined;
+
+  if (!canInject) return originalInvoke(functionName, options as any);
+
+  return originalInvoke(functionName, {
+    ...options,
+    body: { ...(body as Record<string, unknown>), whatsapp_number_id: numberId },
+  } as any);
+};
