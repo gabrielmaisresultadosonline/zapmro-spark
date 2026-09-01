@@ -107,9 +107,14 @@ export async function adminCall<T = Record<string, unknown>>(
   try {
     const response = await fetch(`${baseUrl}/functions/v1/${fn}`, {
       method: "POST",
+      // Porquê: `x-request-id` era um cabeçalho personalizado. O preflight
+      // (OPTIONS) do navegador só é aprovado se o servidor listar TODOS os
+      // cabeçalhos em Access-Control-Allow-Headers — e o gateway da VPS não
+      // listava este. O navegador abortava antes de qualquer resposta e a tela
+      // mostrava "Falha de rede". O requestId continua indo no corpo, que é de
+      // onde o servidor já o lê para idempotência.
       headers: {
         "Content-Type": "application/json",
-        "x-request-id": requestId,
         ...(anonKey ? { apikey: anonKey, Authorization: `Bearer ${anonKey}` } : {}),
       },
       body: JSON.stringify({
