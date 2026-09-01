@@ -2598,6 +2598,56 @@ function isGoogleInsufficientScopeError(errorBody: string) {
   return /insufficient authentication scopes|ACCESS_TOKEN_SCOPE_INSUFFICIENT|PERMISSION_DENIED/i.test(errorBody);
 }
 
+const GOOGLE_CONTACTS_WRITE_SCOPE = 'https://www.googleapis.com/auth/contacts';
+
+/**
+ * Consulta os escopos realmente concedidos ao access token.
+ * Retorna null quando não foi possível verificar (não bloqueia o fluxo).
+ */
+async function checkGoogleTokenScopes(accessToken: string): Promise<string[] | null> {
+  try {
+    const resp = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
+    );
+    if (!resp.ok) return null;
+    const body = await resp.json().catch(() => ({} as any));
+    const scope = typeof body?.scope === 'string' ? body.scope : '';
+    return scope ? scope.split(/\s+/).filter(Boolean) : [];
+  } catch (_e) {
+    return null;
+  }
+}
+
+function hasGoogleContactsWriteScope(scopes: string[] | null): boolean | null {
+  if (scopes === null) return null;
+  return scopes.includes(GOOGLE_CONTACTS_WRITE_SCOPE);
+}
+
+/**
+ * Circuit breaker: marca a conta como "precisa reconectar" e desliga o
+ * auto_sync SÓ dela, para o cron parar de tentar em loop (403 infinito).
+ */
+async function markGoogleAccountReconnectRequired(
+  supabase: any,
+  accountId: string,
+  errorCode: string,
+  errorMessage: string,
+) {
+  try {
+    await supabase.from('crm_google_accounts').update({
+      connection_status: 'reconnect_required',
+      auto_sync: false,
+      last_sync_error_code: errorCode,
+      last_sync_error: String(errorMessage || '').slice(0, 500),
+      last_sync_error_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', accountId);
+  } catch (e) {
+    console.warn('[GOOGLE-SYNC] Não foi possível marcar reconexão necessária:', (e as any)?.message);
+  }
+}
+
+
 function normalizeMetaSendError(result: any, fallback = 'Erro ao enviar mensagem pela Meta') {
   const metaError = result?.error || {};
   const rawMessage = String(metaError?.error_user_msg || metaError?.message || fallback);
