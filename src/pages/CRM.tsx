@@ -1646,6 +1646,8 @@ const CRM = () => {
         if (payload.eventType === 'INSERT') {
           const newMessage: any = payload.new;
           if (!currentUserIdRef.current || newMessage.user_id !== currentUserIdRef.current) return;
+          // Cada número tem sua própria caixa: eventos de outro número não entram aqui.
+          if (!belongsToActiveNumber(newMessage)) return;
           // Disparos em massa/templates podem criar contatos novos (lista fria)
           // que ainda não estão carregados na lista: busca e insere na hora.
           setContacts(prev => {
@@ -1707,6 +1709,7 @@ const CRM = () => {
         } else if (payload.eventType === 'UPDATE') {
           const updatedMessage = payload.new;
           if (!currentUserIdRef.current || updatedMessage.user_id !== currentUserIdRef.current) return;
+          if (!belongsToActiveNumber(updatedMessage)) return;
           if (selectedContactRef.current && updatedMessage.contact_id === selectedContactRef.current.id) {
             setChatMessages(prev => prev.map(m => m.id === updatedMessage.id ? updatedMessage : m));
             if (updatedMessage.direction === 'outbound' && updatedMessage.status === 'failed') {
@@ -1724,6 +1727,7 @@ const CRM = () => {
         const oldRow: any = (payload as any).old;
         const eventOwnerId = newRow?.user_id ?? oldRow?.user_id;
         if (!currentUserIdRef.current || eventOwnerId !== currentUserIdRef.current) return;
+        if (!belongsToActiveNumber(newRow ?? oldRow)) return;
         if (payload.eventType === 'DELETE' && oldRow?.id) {
           setContacts(prev => prev.filter(c => c.id !== oldRow.id));
         } else if (newRow?.id) {
@@ -2320,6 +2324,8 @@ const CRM = () => {
          setUserNumbersCount(numbers.length);
          const stored = getActiveNumberId(user.id);
          const validStored = stored && numbers.some((n) => n.id === stored) ? stored : null;
+         activeNumberIdRef.current = validStored;
+         setActiveWhatsAppNumberId(validStored);
          setActiveNumberId(validStored);
        } catch (multiError) {
          console.warn('[CRM] multi-whatsapp indisponível:', multiError);
@@ -4917,6 +4923,15 @@ const CRM = () => {
   const handleSwitchNumber = () => {
     if (!currentUserId) return;
     persistActiveNumberId(currentUserId, null);
+    activeNumberIdRef.current = null;
+    setActiveWhatsAppNumberId(null);
+    // Nada da caixa anterior pode sobrar na tela ou no cache.
+    setContacts([]);
+    setSelectedContact(null);
+    setChatMessages([]);
+    messagesCacheRef.current = {};
+    contactsSeededRef.current = false;
+    lastContactsSyncRef.current = null;
     setActiveNumberId(null);
   };
   if (!loading && multiNumberEnabled && currentUserId && !activeNumberId) {
@@ -4925,6 +4940,15 @@ const CRM = () => {
         userId={currentUserId}
         maxNumbers={maxWhatsAppNumbers}
         onSelected={(record: WhatsAppNumberRecord) => {
+          // Fixa o escopo ANTES de qualquer consulta para não misturar caixas.
+          activeNumberIdRef.current = record.id;
+          setActiveWhatsAppNumberId(record.id);
+          setContacts([]);
+          setSelectedContact(null);
+          setChatMessages([]);
+          messagesCacheRef.current = {};
+          contactsSeededRef.current = false;
+          lastContactsSyncRef.current = null;
           setActiveNumberId(record.id);
           void fetchData(true);
         }}
@@ -9899,7 +9923,8 @@ const CRM = () => {
                     wa_id: contactToView.wa_id,
                     metadata: contactToView.metadata,
                     status: 'new',
-                    source_type: 'system'
+                    source_type: 'system',
+                    ...numberScopePatch(),
                   }]);
                   if (error) {
                     toast({ title: "Erro ao criar contato", variant: "destructive" });
