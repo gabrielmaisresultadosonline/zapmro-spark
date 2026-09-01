@@ -435,6 +435,17 @@ const CRM = () => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  /**
+   * Resultado da checagem da chave da OpenAI. Sem isto, uma chave errada só
+   * falhava no webhook (401 invalid_api_key) e o usuário achava que a I.A.
+   * estava funcionando.
+   */
+  const [openAiKeyCheck, setOpenAiKeyCheck] = useState<{
+    state: 'idle' | 'checking' | 'valid' | 'invalid';
+    message?: string;
+    detail?: string;
+  }>({ state: 'idle' });
+
   const [bizWarnExpanded, setBizWarnExpanded] = useState(false);
   const [expiredWindowDialog, setExpiredWindowDialog] = useState(false);
   const [confirmConvAction, setConfirmConvAction] = useState<{
