@@ -280,10 +280,13 @@ const BroadcastFailureLogs = ({ broadcast, open, onOpenChange }: BroadcastFailur
             <div className="space-y-2">
               {rows.map((r) => {
                 const info = ERROR_DICTIONARY[r.error_code || ""] || UNKNOWN_ERROR;
+                const meta = r.metadata?.meta_error || null;
                 const details =
+                  r.metadata?.meta_error_details ||
                   r.metadata?.last_meta_status?.errors?.[0]?.error_data?.details ||
                   r.error_message ||
                   "sem detalhe técnico";
+
                 return (
                   <div key={r.id} className="p-3 rounded-xl bg-[#202c33] border border-white/5 space-y-2">
                     <div className="flex items-start justify-between gap-2">
