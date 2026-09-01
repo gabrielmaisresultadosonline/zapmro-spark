@@ -1520,14 +1520,21 @@ else if (message.type === "unsupported") {
   }
 
 
+    // IMPORTANTE: este `contact` alimenta IA, gatilhos e fluxos abaixo.
+    // Sem o escopo por número, um cadastro com 2 caixas usava o contato da
+    // OUTRA caixa (a de last_message_received_at mais recente) — misturando
+    // histórico e travando o envio. O escopo abaixo é obrigatório.
     const variants = getBrazilianPhoneVariants(waId);
-    const { data: contact } = await supabase
-      .from('crm_contacts')
-      .select('*')
-      .in('wa_id', variants)
-      .eq('user_id', userId)
+    let { data: contact } = await scopeNumber(
+      supabase
+        .from('crm_contacts')
+        .select('*')
+        .in('wa_id', variants)
+        .eq('user_id', userId)
+    )
       .order('last_message_received_at', { ascending: false, nullsFirst: true })
       .limit(1)
+
       .maybeSingle();
 
   // CRITICAL: Ensure we capture messages for AI processing if the contact is in any AI-related state
