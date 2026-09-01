@@ -40,8 +40,10 @@ command -v jq   >/dev/null || c_warn "jq ausente (sudo apt-get install -y jq) �
 # shellcheck disable=SC1090
 set -a; . "$ENV_FILE"; set +a
 DB="postgresql://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PG_PORT:-5432}/${POSTGRES_DB:-postgres}"
-q()  { psql "$DB" -v ON_ERROR_STOP=0 -X -q -c "$1" 2>&1; }
-q1() { psql "$DB" -v ON_ERROR_STOP=0 -X -tAc "$1" 2>/dev/null; }
+# sem paginador: o less estava engolindo a saída (tela de "~" e "(END)")
+export PAGER=cat PSQL_PAGER=cat
+q()  { psql "$DB" -v ON_ERROR_STOP=0 -X -q -P pager=off -c "$1" 2>&1; }
+q1() { psql "$DB" -v ON_ERROR_STOP=0 -X -tA -P pager=off -c "$1" 2>/dev/null; }
 [ -n "$(q1 'select 1')" ] || { c_err "Sem conexão com o banco (container zapmro-db de pé?)"; exit 1; }
 
 # e-mail pode estar em auth.users.email ou nos metadados — detecta em runtime
