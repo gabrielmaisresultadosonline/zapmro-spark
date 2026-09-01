@@ -743,7 +743,7 @@ const CRM = () => {
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [isNewWebhookDialogOpen, setIsNewWebhookDialogOpen] = useState(false);
   const [newWebhook, setNewWebhook] = useState({ name: '', response_type: 'text' as 'text' | 'template', template_id: '', secret_token: '', is_active: true, default_status: 'new' });
-  const [googleAccounts, setGoogleAccounts] = useState<Array<{ id: string; email: string; auto_sync: boolean }>>([]);
+  const [googleAccounts, setGoogleAccounts] = useState<Array<{ id: string; email: string; auto_sync: boolean; connection_status?: string | null; last_sync_error?: string | null }>>([]);
   const googleContactsEnabled = googleAccounts.length > 0;
   const anyAutoSync = googleAccounts.some(a => a.auto_sync);
   const MAX_GOOGLE_ACCOUNTS = 3;
