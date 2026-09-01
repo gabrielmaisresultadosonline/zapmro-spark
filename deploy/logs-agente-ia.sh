@@ -82,7 +82,7 @@ SELECT u.email,
        (n.meta_access_token IS NOT NULL)    AS tem_token
   FROM public.crm_whatsapp_numbers n
   LEFT JOIN auth.users u ON u.id = n.user_id
- WHERE ${WHERE/u.email/u.email}
+ WHERE ${WHERE}
  ORDER BY u.email, n.is_primary DESC
  LIMIT 50;"
 
