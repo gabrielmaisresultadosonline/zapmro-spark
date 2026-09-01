@@ -122,7 +122,7 @@ if [ -z "$LINHAS" ]; then
 fi
 
 while IFS='|' read -r email label pnid waba token nid; do
-  [ -z "${nid// }" ] && continue
+  [ -z "${pnid// }${nid// }" ] && continue
   titulo "2) Meta Cloud API — ${label:-sem nome} ($email)"
   if [ -z "${pnid// }" ] || [ -z "${token// }" ]; then
     c_err "  Credencial incompleta (phone_number_id ou token vazio) -> reconecte esta caixa no CRM."
