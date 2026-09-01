@@ -315,6 +315,13 @@ const BroadcastFailureLogs = ({ broadcast, open, onOpenChange }: BroadcastFailur
                           <span className="font-medium">Como reenviar:</span> {info.fix}
                         </p>
                         <p className="text-[9px] text-[#8696a0]/70 break-all">Detalhe técnico: {details}</p>
+                        {meta ? (
+                          <p className="text-[9px] text-[#8696a0]/60 break-all">
+                            Meta code: {String(meta.code ?? "-")} · subcode: {String(meta.error_subcode ?? "-")} · type:{" "}
+                            {String(meta.type ?? "-")} · fbtrace_id: {String(meta.fbtrace_id ?? "-")}
+                          </p>
+                        ) : null}
+
                       </div>
                     </div>
                   </div>
