@@ -6769,40 +6769,91 @@ async function fetchAndStoreIncomingMedia(
         });
       }
 
+      /**
+       * Mapeia a resposta de erro da OpenAI para um código estável.
+       * `insufficient_quota` / `credit_balance_exhausted` chegam com HTTP 429,
+       * mas são SALDO ZERADO — precisa avisar diferente de "limite de uso".
+       */
+      const mapOpenAiError = (status: number, body: any) => {
+        const errCode = String(body?.error?.code || body?.error?.type || '');
+        if (
+          status === 429 &&
+          /insufficient_quota|credit_balance_exhausted|billing_hard_limit/i.test(errCode)
+        ) {
+          return {
+            code: 'no_credits',
+            message:
+              'SEM SALDO na OpenAI: a chave é válida, mas a conta está sem créditos. Adicione créditos em platform.openai.com/settings/organization/billing.',
+          };
+        }
+        const codeMap: Record<number, { code: string; message: string }> = {
+          401: { code: 'invalid_api_key', message: 'API ERRADA: a OpenAI recusou esta chave (401). Gere uma nova em platform.openai.com/api-keys.' },
+          403: { code: 'forbidden', message: 'API sem permissão (403): a chave existe mas não pode usar este modelo/projeto.' },
+          404: { code: 'model_not_available', message: 'A chave é válida, mas o projeto não tem acesso ao modelo gpt-4o-mini.' },
+          429: { code: 'rate_limit', message: 'Limite de uso atingido agora (429). Aguarde alguns instantes e teste de novo.' },
+        };
+        return (
+          codeMap[status] || {
+            code: 'provider_error',
+            message: `A OpenAI respondeu com erro (${status}). Tente novamente em instantes.`,
+          }
+        );
+      };
+
       try {
         const check = await fetch('https://api.openai.com/v1/models/gpt-4o-mini', {
           headers: { Authorization: `Bearer ${rawKey}` },
         });
 
-        if (check.ok) {
+        if (!check.ok) {
+          const body = await check.json().catch(() => ({} as any));
+          const mapped = mapOpenAiError(check.status, body);
+          return jsonResponse({
+            success: true,
+            valid: false,
+            code: mapped.code,
+            status: check.status,
+            message: mapped.message,
+            provider_message: body?.error?.message || `HTTP ${check.status}`,
+          });
+        }
+
+        /**
+         * A listagem de modelos funciona mesmo com saldo zerado — por isso
+         * fazemos uma geração mínima (1 token) para detectar falta de crédito
+         * ANTES de salvar, e não só no webhook.
+         */
+        const probe = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${rawKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            max_tokens: 1,
+            messages: [{ role: 'user', content: 'ping' }],
+          }),
+        });
+
+        if (probe.ok) {
           return jsonResponse({
             success: true,
             valid: true,
             code: 'ok',
-            message: 'API correta — chave válida e com acesso ao modelo gpt-4o-mini.',
+            message: 'API correta — chave válida, com acesso ao gpt-4o-mini e com saldo disponível.',
           });
         }
 
-        const body = await check.json().catch(() => ({} as any));
-        const providerMessage = body?.error?.message || `HTTP ${check.status}`;
-        const codeMap: Record<number, { code: string; message: string }> = {
-          401: { code: 'invalid_api_key', message: 'API ERRADA: a OpenAI recusou esta chave (401). Gere uma nova em platform.openai.com/api-keys.' },
-          403: { code: 'forbidden', message: 'API sem permissão (403): a chave existe mas não pode usar este modelo/projeto.' },
-          404: { code: 'model_not_available', message: 'A chave é válida, mas o projeto não tem acesso ao modelo gpt-4o-mini.' },
-          429: { code: 'quota_or_rate_limit', message: 'Chave sem crédito ou com limite atingido (429). Verifique o faturamento na OpenAI.' },
-        };
-        const mapped = codeMap[check.status] || {
-          code: 'provider_error',
-          message: `A OpenAI respondeu com erro (${check.status}). Tente novamente em instantes.`,
-        };
-
+        const probeBody = await probe.json().catch(() => ({} as any));
+        const mapped = mapOpenAiError(probe.status, probeBody);
         return jsonResponse({
           success: true,
           valid: false,
           code: mapped.code,
-          status: check.status,
+          status: probe.status,
           message: mapped.message,
-          provider_message: providerMessage,
+          provider_message: probeBody?.error?.message || `HTTP ${probe.status}`,
         });
       } catch (err: any) {
         return jsonResponse({
