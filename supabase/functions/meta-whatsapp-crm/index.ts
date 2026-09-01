@@ -1417,13 +1417,17 @@ else if (message.type === "unsupported") {
 
   if (!contactForSave && !skipSave) {
     const profileName = message?.profile?.name || message?.contacts?.[0]?.profile?.name || waId;
-    
-    // ATENÇÃO: Prevenção de duplicidade de contatos.
-    // O webhook pode chegar em rajadas. Tentamos inserir, se falhar por conflito
-    // buscamos novamente o contato existente para garantir que usamos o ID correto.
+
+    // ATENÇÃO: NÃO usar .upsert() aqui.
+    // Os índices únicos de crm_contacts são PARCIAIS
+    // (WHERE whatsapp_number_id IS NOT NULL / IS NULL). O PostgREST envia
+    // "ON CONFLICT (cols)" sem o predicado, e o Postgres não infere índice
+    // parcial nesse caso -> erro "no unique or exclusion constraint matching
+    // the ON CONFLICT specification", que fazia TODA mensagem recebida falhar.
+    // Padrão seguro: insert direto e, em caso de corrida/duplicidade, releitura.
     const { data: newContact, error: createContactError } = await supabase
       .from('crm_contacts')
-      .upsert({
+      .insert({
         // Sempre gravamos a forma canônica para nunca criar duas conversas
         // do mesmo contato (com e sem o 9º dígito).
         wa_id: canonicalBrazilianWaId(waId),
@@ -1436,15 +1440,12 @@ else if (message.type === "unsupported") {
         total_messages_received: 0,
         metadata: { source: 'meta_webhook', profile: message?.profile || null },
         ...numberPatch
-      }, { 
-        onConflict: inboundNumberId ? 'wa_id,user_id,whatsapp_number_id' : 'wa_id,user_id',
-        ignoreDuplicates: false 
       })
       .select('id, total_messages_received')
       .maybeSingle();
 
-    if (createContactError) {
-      // Fallback manual se o upsert falhar por qualquer motivo (ex: restrição complexa)
+    if (createContactError || !newContact) {
+      // Corrida entre entregas simultâneas da Meta: o contato já existe.
       const { data: retryContact } = await scopeNumber(
         supabase
           .from('crm_contacts')
@@ -1455,19 +1456,30 @@ else if (message.type === "unsupported") {
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1)
         .maybeSingle();
-      
+
       if (retryContact) {
         contactForSave = retryContact;
         console.log('[WEBHOOK] Contact duplicate resolved via retry', { waId, contact_id: contactForSave.id });
       } else {
-        console.error('[WEBHOOK] Failed to resolve contact creation', { waId, userId, error: createContactError.message });
-        return jsonResponse({ success: false, error: createContactError.message }, 500);
+        console.error('[WEBHOOK] Failed to resolve contact creation', {
+          waId,
+          userId,
+          whatsapp_number_id: inboundNumberId,
+          error: createContactError?.message || 'insert returned no row',
+        });
+        return jsonResponse({ success: false, error: createContactError?.message || 'contact_create_failed' }, 500);
       }
     } else {
       contactForSave = newContact;
-      console.log('[WEBHOOK] Handled inbound contact (upsert)', { waId, userId, contact_id: contactForSave?.id });
+      console.log('[WEBHOOK] Handled inbound contact (insert)', {
+        waId,
+        userId,
+        whatsapp_number_id: inboundNumberId,
+        contact_id: contactForSave?.id,
+      });
     }
   }
+
 
   if (contactForSave && !skipSave) {
     // Capture state BEFORE update so we can evaluate triggers (first message, day, 24h)
