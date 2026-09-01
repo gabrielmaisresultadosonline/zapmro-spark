@@ -2994,10 +2994,19 @@ async function getWhatsAppNumberByPhoneId(
   wabaId?: string | null,
 ) {
   if (!phoneNumberId && !wabaId) return null;
-  let query = supabase.from('crm_whatsapp_numbers').select('*').limit(1);
+  // Ordenação determinística: se o mesmo phone_number_id estiver cadastrado
+  // duas vezes (erro de configuração), sempre resolvemos para o número ativo
+  // mais recente, em vez de uma linha arbitrária do banco.
+  let query = supabase
+    .from('crm_whatsapp_numbers')
+    .select('*')
+    .order('is_active', { ascending: false, nullsFirst: false })
+    .order('updated_at', { ascending: false, nullsFirst: false })
+    .limit(1);
   query = phoneNumberId
     ? query.eq('meta_phone_number_id', phoneNumberId)
     : query.eq('meta_waba_id', wabaId);
+
   const { data, error } = await query;
   if (error) console.warn('[NUMBER] lookup by phone failed', error.message);
   const row = Array.isArray(data) ? data[0] : null;
