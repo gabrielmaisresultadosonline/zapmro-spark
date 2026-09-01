@@ -2,6 +2,51 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.42.0"
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/**
+ * Credenciais de envio isoladas por número de WhatsApp.
+ * Cadastros com mais de um número têm bases separadas: o contato guarda
+ * `whatsapp_number_id`, e é por esse número que a resposta precisa sair.
+ * Enviar pelo número errado é o que produzia o erro "Re-engagement message".
+ */
+async function getSendCredentials(supabase: any, userId: string, contactId?: string) {
+  let numberId: string | null = null;
+
+  if (contactId) {
+    const { data: contact } = await supabase
+      .from('crm_contacts')
+      .select('whatsapp_number_id')
+      .eq('id', contactId)
+      .maybeSingle();
+    numberId = contact?.whatsapp_number_id ?? null;
+  }
+
+  if (numberId) {
+    const { data: numberRow } = await supabase
+      .from('crm_whatsapp_numbers')
+      .select('meta_phone_number_id, meta_access_token, user_id')
+      .eq('id', numberId)
+      .maybeSingle();
+    if (
+      numberRow?.meta_phone_number_id &&
+      numberRow?.meta_access_token &&
+      (!userId || numberRow.user_id === userId)
+    ) {
+      return {
+        meta_phone_number_id: numberRow.meta_phone_number_id,
+        meta_access_token: numberRow.meta_access_token,
+      };
+    }
+  }
+
+  // Fallback: cadastro com um único número (comportamento legado).
+  const { data: settings } = await supabase
+    .from('crm_settings')
+    .select('meta_phone_number_id, meta_access_token')
+    .eq('user_id', userId)
+    .maybeSingle();
+  return settings || null;
+}
+
 export async function executeVisualNode(supabase: any, flow: any, node: any, contactId: string, waId: string) {
   console.log(`[EXECUTOR] Executing node ${node.id} (${node.type}) for contact ${contactId}`);
 
@@ -40,7 +85,7 @@ export async function executeVisualNode(supabase: any, flow: any, node: any, con
         const linkButtons = buttons.filter((btn: any) => btn.url && btn.url.startsWith('http'));
         const replyButtons = buttons.filter((btn: any) => !(btn.url && btn.url.startsWith('http')));
 
-        const { data: settings } = await supabase.from('crm_settings').select('meta_phone_number_id, meta_access_token').eq('user_id', flow.user_id).maybeSingle();
+        const { data: settings } = await getSendCredentials(supabase, flow.user_id, contactId);
         console.log(`[EXECUTOR] Settings found for user ${flow.user_id}: ${!!settings?.meta_access_token}`);
 
         // 1) Envia botões de resposta normais (se houver)
@@ -144,7 +189,7 @@ export async function executeVisualNode(supabase: any, flow: any, node: any, con
       } else if (text) {
 
         console.log(`[EXECUTOR] Enviando mensagem de texto simples para ${waId}`);
-        const { data: settings } = await supabase.from('crm_settings').select('meta_phone_number_id, meta_access_token').eq('user_id', flow.user_id).maybeSingle();
+        const { data: settings } = await getSendCredentials(supabase, flow.user_id, contactId);
 
         const body: any = { 
           action: 'sendMessage', 
@@ -530,10 +575,7 @@ export async function executeVisualNode(supabase: any, flow: any, node: any, con
       const rawValue = (node.data?.copyValue || '').toString().trim();
       const buttonLabel = ((node.data?.buttonLabel || 'Copiar').toString()).substring(0, 20);
 
-      const { data: settings } = await supabase.from('crm_settings')
-        .select('meta_phone_number_id, meta_access_token')
-        .eq('user_id', flow.user_id)
-        .maybeSingle();
+      const { data: settings } = await getSendCredentials(supabase, flow.user_id, contactId);
 
       if (kind === 'link' && /^https?:\/\//i.test(rawValue)) {
         await supabase.functions.invoke('meta-whatsapp-crm', {
@@ -579,10 +621,7 @@ export async function executeVisualNode(supabase: any, flow: any, node: any, con
       const headerText = (node.data?.headerText || '').toString().trim();
       console.log(`[EXECUTOR] mediaCarousel node ${node.id}: ${cards.length} cards, headerText=${!!headerText}`);
 
-      const { data: settings } = await supabase.from('crm_settings')
-        .select('meta_phone_number_id, meta_access_token')
-        .eq('user_id', flow.user_id)
-        .maybeSingle();
+      const { data: settings } = await getSendCredentials(supabase, flow.user_id, contactId);
 
       if (headerText) {
         await supabase.functions.invoke('meta-whatsapp-crm', {
