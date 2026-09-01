@@ -5542,11 +5542,27 @@ async function fetchAndStoreIncomingMedia(
       const normalizedTo = normalizePhone(to);
       const variants = getBrazilianPhoneVariants(normalizedTo);
 
-      const { data: existingContact, error: contactLookupError } = await supabase
-        .from('crm_contacts')
-        .select('*')
-        .in('wa_id', variants)
-        .eq('user_id', userId)
+      // Multi-número: o template pertence à caixa que está enviando.
+      const templatePhoneNumberId =
+        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id;
+      let templateNumberId: string | null = scopedNumberId;
+      if (!templateNumberId && templatePhoneNumberId) {
+        const numberRowForTemplate = await getWhatsAppNumberByPhoneId(supabase, templatePhoneNumberId);
+        if (numberRowForTemplate && (!userId || numberRowForTemplate.user_id === userId)) {
+          templateNumberId = numberRowForTemplate.id;
+        }
+      }
+      const templateScope = <T,>(query: T): T =>
+        templateNumberId ? ((query as any).eq('whatsapp_number_id', templateNumberId) as T) : query;
+      const templateNumberPatch = templateNumberId ? { whatsapp_number_id: templateNumberId } : {};
+
+      const { data: existingContact, error: contactLookupError } = await templateScope(
+        supabase
+          .from('crm_contacts')
+          .select('*')
+          .in('wa_id', variants)
+          .eq('user_id', userId)
+      )
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1)
         .maybeSingle();
@@ -5568,6 +5584,7 @@ async function fetchAndStoreIncomingMedia(
             user_id: userId,
             status: 'new',
             source_type: 'broadcast',
+            ...templateNumberPatch,
           })
           .select('*')
           .maybeSingle();
@@ -5576,11 +5593,13 @@ async function fetchAndStoreIncomingMedia(
           console.error('[TEMPLATE] Falha ao criar contato da lista fria:', createContactError.message);
 
           // Proteção para uma possível criação concorrente do mesmo número.
-          const { data: concurrentContact } = await supabase
-            .from('crm_contacts')
-            .select('*')
-            .in('wa_id', variants)
-            .eq('user_id', userId)
+          const { data: concurrentContact } = await templateScope(
+            supabase
+              .from('crm_contacts')
+              .select('*')
+              .in('wa_id', variants)
+              .eq('user_id', userId)
+          )
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -5602,13 +5621,13 @@ async function fetchAndStoreIncomingMedia(
       const { contactId: providedContactId, broadcastId } = params;
       const response = await internalSendTemplate(
         supabase, 
-        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id, 
+        templatePhoneNumberId,
         meta_access_token || settings?.meta_access_token || params.meta_access_token, 
         to, 
         templateName, 
         languageCode || 'pt_BR', 
         manualComponents, 
-        contact,
+        { ...contact, whatsapp_number_id: contact.whatsapp_number_id || templateNumberId || null },
         null,
         providedContactId,
         broadcastId
