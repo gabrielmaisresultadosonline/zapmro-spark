@@ -4016,30 +4016,69 @@ async function ensureMetaAppWebhookConfigured() {
   }
 
   const callbackUrl = `${baseUrl}/functions/v1/meta-whatsapp-crm`;
-  const form = new URLSearchParams();
-  form.set('object', 'whatsapp_business_account');
-  form.set('callback_url', callbackUrl);
-  // "message_echoes" requires permissions that are not granted in every Meta app.
-  // If we request it together with "messages", Meta rejects the whole webhook subscription
-  // and inbound conversations stop arriving. Keep the required field minimal.
-  form.set('fields', 'messages');
-  form.set('verify_token', getGlobalWebhookVerifyToken());
-  form.set('access_token', `${APP_ID}|${APP_SECRET}`);
 
-  try {
+  // Coexistência (SMB) só entrega conversas se os campos smb_* estiverem assinados.
+  // Alguns apps Meta não têm permissão para eles: se a Meta recusar o conjunto
+  // completo, refazemos a inscrição apenas com "messages" — nunca deixamos o
+  // recebimento das outras caixas quebrado por causa de um campo extra.
+  const fieldSets = [
+    'messages,smb_message_echoes,smb_app_state_sync,history,message_template_status_update',
+    'messages,smb_message_echoes,smb_app_state_sync,history',
+    'messages,smb_message_echoes',
+    'messages',
+  ];
+
+  const subscribeWithFields = async (fields: string) => {
+    const form = new URLSearchParams();
+    form.set('object', 'whatsapp_business_account');
+    form.set('callback_url', callbackUrl);
+    form.set('fields', fields);
+    form.set('verify_token', getGlobalWebhookVerifyToken());
+    form.set('access_token', `${APP_ID}|${APP_SECRET}`);
+
     const res = await fetch(`https://graph.facebook.com/v25.0/${APP_ID}/subscriptions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: form.toString(),
     });
     const json = await res.json().catch(() => ({}));
-    console.log('[META WEBHOOK] app subscription response', { ok: res.ok, status: res.status, success: json?.success || null, error: json?.error?.message || null });
-    return { success: res.ok, status: res.status, result: json, callback_url: callbackUrl };
+    console.log('[META WEBHOOK] app subscription response', {
+      ok: res.ok,
+      status: res.status,
+      fields,
+      success: json?.success || null,
+      error: json?.error?.message || null,
+    });
+    return { ok: res.ok && json?.success !== false, status: res.status, json };
+  };
+
+  try {
+    let last: { ok: boolean; status: number; json: any } | null = null;
+    for (const fields of fieldSets) {
+      last = await subscribeWithFields(fields);
+      if (last.ok) {
+        return {
+          success: true,
+          status: last.status,
+          result: last.json,
+          callback_url: callbackUrl,
+          subscribed_fields: fields,
+        };
+      }
+    }
+    return {
+      success: false,
+      status: last?.status ?? 0,
+      result: last?.json ?? {},
+      callback_url: callbackUrl,
+      subscribed_fields: null,
+    };
   } catch (e: any) {
     console.error('[META WEBHOOK] app subscription failed', { message: e?.message || String(e) });
     return { success: false, error: e?.message || String(e) };
   }
 }
+
 
 function getWebhookRepairError(appWebhook: any, wabaSubscription: any) {
   const appError = appWebhook?.result?.error || {};
