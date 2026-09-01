@@ -7855,10 +7855,32 @@ const CRM = () => {
                                 type="password"
                                 placeholder="sk-..."
                                 value={metaSettings.openai_api_key}
-                                onChange={(e) => setMetaSettings({...metaSettings, openai_api_key: e.target.value})}
+                                onChange={(e) => {
+                                  setMetaSettings({...metaSettings, openai_api_key: e.target.value});
+                                  setOpenAiKeyCheck({ state: 'idle' });
+                                }}
+                                onBlur={(e) => {
+                                  const value = e.target.value.trim();
+                                  if (value) void validateOpenAiKey(value, { silent: true });
+                                }}
                               />
-                              <p className="text-[10px] text-muted-foreground italic">Use uma chave da OpenAI (GPT-4o recomendado).</p>
+                              {openAiKeyCheck.state === 'checking' && (
+                                <p className="text-[11px] font-bold text-muted-foreground flex items-center gap-1">
+                                  <RefreshCcw className="w-3 h-3 animate-spin" /> Testando a API na OpenAI...
+                                </p>
+                              )}
+                              {openAiKeyCheck.state === 'valid' && (
+                                <p className="text-[11px] font-bold text-[#00875A]">API correta ✅ {openAiKeyCheck.message}</p>
+                              )}
+                              {openAiKeyCheck.state === 'invalid' && (
+                                <p className="text-[11px] font-bold text-destructive">
+                                  API ERRADA ❌ {openAiKeyCheck.message}
+                                  {openAiKeyCheck.detail ? ` — ${openAiKeyCheck.detail}` : ''}
+                                </p>
+                              )}
+                              <p className="text-[10px] text-muted-foreground italic">Use uma chave da OpenAI (GPT-4o recomendado). A chave é testada antes de salvar.</p>
                             </div>
+
 
                             <div className="space-y-2">
                               <Label className="text-sm font-bold flex items-center gap-2">
