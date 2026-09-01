@@ -3885,7 +3885,56 @@ async function internalSendTemplate(
     }
   }
 
+  // ---- GUARDA: a Meta só entrega template APROVADO ----
+  // Enviar template PENDING/REJECTED/PAUSED/DISABLED retorna erros genéricos
+  // (code 10/100/132001) que eram interpretados como "saldo insuficiente".
+  // Bloqueamos antes de chamar a Graph API e explicamos o motivo real.
+  try {
+    const { data: statusRow } = await supabase
+      .from('crm_templates')
+      .select('status, language')
+      .eq('name', templateName)
+      .eq('user_id', contact?.user_id)
+      .maybeSingle();
+
+    const tplStatus = String(statusRow?.status || '').toUpperCase();
+    if (statusRow && tplStatus !== 'APPROVED') {
+      const label = tplStatus || 'DESCONHECIDO';
+      const normalizedError = {
+        code: 'META_TEMPLATE_NOT_APPROVED',
+        message: `O template "${templateName}" está com status ${label} na Meta. Só é possível disparar templates APROVADOS — aguarde a aprovação (ou corrija/reenvie o template) antes de tentar novamente.`,
+        details: `template=${templateName} status=${label} (bloqueado localmente, sem chamada à Graph API)`,
+      };
+
+      if (contact) {
+        await supabase.from('crm_messages').insert({
+          contact_id: contact.id,
+          user_id: contact.user_id || null,
+          ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
+          direction: 'outbound',
+          message_type: 'template',
+          content: `[Template: ${templateName}]`,
+          status: 'failed',
+          error_code: normalizedError.code,
+          error_message: normalizedError.message,
+          metadata: {
+            template_name: templateName,
+            template_status: label,
+            broadcast_id: broadcastId || null,
+            meta_error_details: normalizedError.details,
+          },
+        });
+      }
+
+      console.warn(`[TEMPLATE-GUARD] Bloqueado envio de template não aprovado: ${templateName} (${label})`);
+      return jsonResponse({ success: false, ...normalizedError }, 200);
+    }
+  } catch (guardErr) {
+    console.warn('[TEMPLATE-GUARD] Não foi possível validar o status do template:', (guardErr as any)?.message);
+  }
+
   // Se não houver componentes manuais, tentamos buscar no banco de dados para ver se há mídia salva (HEADER ou CAROUSEL)
+
   if (!manualComponents || manualComponents.length === 0) {
     const { data: templateData } = await supabase
       .from('crm_templates')

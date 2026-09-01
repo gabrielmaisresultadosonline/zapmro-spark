@@ -523,8 +523,24 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
 
         // REGRAS DE DISPARO (META API)
         if (type === 'template') {
-          // Templates podem ser enviados para qualquer um (Lista Fria ou Janela Ativa)
+          // A Meta só entrega template APROVADO. Bloqueamos antes do disparo
+          // para não queimar a lista com erros genéricos (code 10/132001).
+          const tpl = templates.find(t => t.id === selectedTemplate);
+          const tplStatus = String(tpl?.status || '').toUpperCase();
+          if (!tpl || tplStatus !== 'APPROVED') {
+            toast({
+              title: "Template não aprovado",
+              description: tpl
+                ? `O template "${tpl.name}" está com status ${tplStatus || 'DESCONHECIDO'} na Meta. Só é possível disparar templates APROVADOS — aguarde a aprovação antes de enviar.`
+                : "Selecione um template aprovado pela Meta para disparar.",
+              variant: "destructive",
+            });
+            setLoading(false);
+            return;
+          }
+          // Templates aprovados podem ser enviados para qualquer um (Lista Fria ou Janela Ativa)
           numbers = potentialNumbers;
+
         } else {
           // Mensagem normal e Fluxos só podem ser enviados para Janela Ativa (24h)
           const activeNumbers = contacts
