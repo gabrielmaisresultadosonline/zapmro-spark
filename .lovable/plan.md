@@ -1,40 +1,34 @@
-# Corrigir /admincentral: "Falha de rede ao contatar o servidor"
+# Corrigir prévia de mídia no fluxo + animação ao salvar
 
-## Diagnóstico (causa raiz encontrada)
+## Problema 1 — imagens/vídeos quebrados na prévia do fluxo
 
-O login entra (validação local por hash), mas **nenhuma leitura carrega**. O motivo não é o servidor estar fora: é o **CORS preflight** sendo recusado.
+As mídias do fluxo são gravadas com a URL pública do Storage no momento do upload. Depois da migração para a VPS, essas URLs antigas (`*.supabase.co` ou host interno `gateway:8000`) não existem mais no navegador — por isso a prévia aparece como imagem quebrada, mesmo com o arquivo presente.
 
-- `src/lib/adminCentralApi.ts` envia o cabeçalho personalizado `x-request-id` em toda chamada.
-- Um cabeçalho personalizado força o navegador a fazer um `OPTIONS` (preflight) antes do `POST`.
-- O gateway da VPS (`deploy/postgres-stack/nginx.conf`) responde `Access-Control-Allow-Headers` com uma lista fixa que **não inclui `x-request-id`**. As Edge Functions (`crm-central-admin`, `crm-central-admin-login`) também não incluem.
-- O navegador então aborta a requisição **antes de qualquer resposta**. O `fetch` lança `TypeError`, que o cliente traduz exatamente como "Falha de rede ao contatar o servidor".
+Já existe a função `resolveMediaUrl()` (`src/lib/mediaUrl.ts`) que reescreve esses casos para o Storage atual. O chat do CRM já a usa; o editor de fluxos e a prévia estilo WhatsApp **não**.
 
-Ou seja: acessa a tela, mas toda ação (listar contatos, liberar plano, travar, excluir) morre no preflight.
+Correção: aplicar `resolveMediaUrl()` em todo `src`/`poster` de mídia dentro do fluxo:
+- `src/components/crm/FlowEditor.tsx` — nós de imagem/vídeo (miniatura no canvas), painel lateral de pergunta/imagem/vídeo, cartões do carrossel.
+- `src/components/crm/WhatsAppFlowPreview.tsx` — `imageUrl`, `videoUrl` e `cards[].mediaUrl`.
 
-## Correção
+Adicionalmente, quando a imagem falhar mesmo assim, mostrar um estado visual claro ("mídia indisponível") em vez do ícone quebrado do navegador, usando `onError` com token semântico.
 
-1. **Cliente (efeito imediato, sem depender da VPS)** — `src/lib/adminCentralApi.ts`
-   - Remover o cabeçalho `x-request-id` do `fetch`. O `requestId` continua indo **no corpo** (o servidor já o lê de lá para idempotência), então nada de comportamento se perde.
-   - Sem cabeçalho personalizado, a requisição volta a ser "simples" e não exige preflight.
+## Problema 2 — salvar parece não atualizar
 
-2. **Gateway (defensivo)** — `deploy/postgres-stack/nginx.conf`
-   - Acrescentar `x-request-id` (e `x-admin-session`) na lista de `Access-Control-Allow-Headers` dos blocos `/functions/v1/`, `/rest/v1/` e `/auth/v1/`, tanto na resposta normal quanto no ramo `OPTIONS`.
+Hoje o `onSave` fecha o editor na hora e chama `fetchData(false)`, que recarrega **todos** os dados do CRM (contatos, mensagens, agendamentos…). Por isso demora ~3s e, se o fluxo for reaberto logo em seguida, ainda vem a versão antiga.
 
-3. **Edge Functions (defensivo)** — `crm-central-admin` e `crm-central-admin-login`
-   - Padronizar `Access-Control-Allow-Headers` incluindo `x-request-id`, para o caso de a função ser chamada sem passar pelo Nginx.
+Correção em `src/pages/CRM.tsx` (`handleSaveFlow`):
+1. Mostrar um overlay bloqueante com ícone do WhatsApp animado e barra de progresso enquanto salva.
+2. Após o `update`/`insert`, recarregar **apenas** `crm_flows` (consulta escopada, não `fetchData` inteiro) e atualizar o estado local — isso deixa o salvar bem mais rápido e garante que o fluxo reaberto já esteja atualizado.
+3. Só então fechar o overlay e o editor, com uma pequena transição de "Salvo!" para não confundir.
 
-4. **Mensagem de erro mais útil** — `src/lib/adminCentralApi.ts`
-   - Diferenciar "bloqueado pelo navegador (CORS/preflight)" de "servidor inacessível", para que um problema desse tipo seja identificável na primeira leitura, em vez de virar um genérico "falha de rede".
+## Novo componente
 
-## Aplicação na VPS
-
-```bash
-cd /var/www/ia-mro && git fetch origin && git reset --hard origin/main
-chmod +x deploy/*.sh && ./deploy/atualizar.sh
-```
-
-O item 1 já resolve o acesso mesmo antes do Nginx ser recarregado; os itens 2 e 3 entram junto no `atualizar.sh`.
+`src/components/crm/FlowSaveOverlay.tsx` — overlay de tela cheia:
+- ícone do WhatsApp com pulso/ping suave;
+- barra de progresso animada que avança durante o salvamento e completa em 100% ao terminar;
+- estados: `Salvando fluxo...` → `Fluxo salvo!`, fechando sozinho.
+- Tokens semânticos e `cn()`, mobile-first, com `role="status"` e `aria-live`.
 
 ## Escopo
 
-Sem alteração de banco, de RLS ou de qualquer lógica de negócio do CRM/WhatsApp. Somente transporte HTTP/CORS do `/admincentral`.
+Nada além disso é alterado: lógica de nós, envio, webhooks e demais telas ficam intactas.
