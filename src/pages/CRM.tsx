@@ -435,6 +435,17 @@ const CRM = () => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  /**
+   * Resultado da checagem da chave da OpenAI. Sem isto, uma chave errada só
+   * falhava no webhook (401 invalid_api_key) e o usuário achava que a I.A.
+   * estava funcionando.
+   */
+  const [openAiKeyCheck, setOpenAiKeyCheck] = useState<{
+    state: 'idle' | 'checking' | 'valid' | 'invalid';
+    message?: string;
+    detail?: string;
+  }>({ state: 'idle' });
+
   const [bizWarnExpanded, setBizWarnExpanded] = useState(false);
   const [expiredWindowDialog, setExpiredWindowDialog] = useState(false);
   const [confirmConvAction, setConfirmConvAction] = useState<{
@@ -2395,6 +2406,46 @@ const CRM = () => {
     }
   };
 
+
+  /**
+   * Checa a chave da OpenAI no servidor (a Meta/OpenAI não permite validar
+   * direto do navegador com segurança). Retorna se pode prosseguir com o save.
+   */
+  const validateOpenAiKey = async (
+    apiKey: string,
+    opts: { silent?: boolean } = {}
+  ): Promise<{ valid: boolean; message: string; detail?: string }> => {
+    setOpenAiKeyCheck({ state: 'checking' });
+    try {
+      const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
+        body: { action: 'validateOpenAiKey', api_key: apiKey },
+      });
+      if (error) throw error;
+
+      const valid = data?.valid === true;
+      const message = String(data?.message || (valid ? 'API correta.' : 'API ERRADA.'));
+      const detail = data?.provider_message ? String(data.provider_message) : undefined;
+
+      setOpenAiKeyCheck({ state: valid ? 'valid' : 'invalid', message, detail });
+
+      if (!opts.silent) {
+        toast({
+          title: valid ? 'API correta ✅' : 'API ERRADA ❌',
+          description: detail ? `${message} (${detail})` : message,
+          variant: valid ? 'default' : 'destructive',
+        });
+      }
+      return { valid, message, detail };
+    } catch (err: any) {
+      const message =
+        'Não foi possível validar a chave agora. Verifique a conexão e tente novamente.';
+      setOpenAiKeyCheck({ state: 'invalid', message, detail: err?.message });
+      if (!opts.silent) {
+        toast({ title: 'Falha ao validar a API', description: message, variant: 'destructive' });
+      }
+      return { valid: false, message, detail: err?.message };
+    }
+  };
 
    const handleSaveSettings = async (customSettings?: any) => {
      setSaving(true);
@@ -7647,6 +7698,14 @@ const CRM = () => {
                               return;
                             }
 
+                            // Nunca ligar a I.A. com API errada — era o cenário
+                            // "ativada mas não responde" (401 invalid_api_key).
+                            const keyCheck = await validateOpenAiKey(
+                              String(metaSettings.openai_api_key).trim()
+                            );
+                            if (!keyCheck.valid) return;
+
+
                             if (!metaSettings.business_description || metaSettings.business_description.length < 10) {
                               toast({
                                 title: "Cérebro não configurado",
@@ -7804,10 +7863,32 @@ const CRM = () => {
                                 type="password"
                                 placeholder="sk-..."
                                 value={metaSettings.openai_api_key}
-                                onChange={(e) => setMetaSettings({...metaSettings, openai_api_key: e.target.value})}
+                                onChange={(e) => {
+                                  setMetaSettings({...metaSettings, openai_api_key: e.target.value});
+                                  setOpenAiKeyCheck({ state: 'idle' });
+                                }}
+                                onBlur={(e) => {
+                                  const value = e.target.value.trim();
+                                  if (value) void validateOpenAiKey(value, { silent: true });
+                                }}
                               />
-                              <p className="text-[10px] text-muted-foreground italic">Use uma chave da OpenAI (GPT-4o recomendado).</p>
+                              {openAiKeyCheck.state === 'checking' && (
+                                <p className="text-[11px] font-bold text-muted-foreground flex items-center gap-1">
+                                  <RefreshCcw className="w-3 h-3 animate-spin" /> Testando a API na OpenAI...
+                                </p>
+                              )}
+                              {openAiKeyCheck.state === 'valid' && (
+                                <p className="text-[11px] font-bold text-[#00875A]">API correta ✅ {openAiKeyCheck.message}</p>
+                              )}
+                              {openAiKeyCheck.state === 'invalid' && (
+                                <p className="text-[11px] font-bold text-destructive">
+                                  API ERRADA ❌ {openAiKeyCheck.message}
+                                  {openAiKeyCheck.detail ? ` — ${openAiKeyCheck.detail}` : ''}
+                                </p>
+                              )}
+                              <p className="text-[10px] text-muted-foreground italic">Use uma chave da OpenAI (GPT-4o recomendado). A chave é testada antes de salvar.</p>
                             </div>
+
 
                             <div className="space-y-2">
                               <Label className="text-sm font-bold flex items-center gap-2">
@@ -7839,8 +7920,20 @@ const CRM = () => {
                               >
                                 <LinkIcon className="w-4 h-4 mr-2" /> OpenAI Token
                               </Button>
-                              <Button onClick={() => handleSaveSettings()} disabled={saving} size="sm" className="bg-[#00875A] hover:bg-[#00875A]/90">
-                                {saving ? <RefreshCcw className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
+                              <Button
+                                onClick={async () => {
+                                  // Bloqueia o save quando a API está errada: antes a
+                                  // chave inválida só aparecia como 401 no webhook.
+                                  const key = String(metaSettings.openai_api_key || '').trim();
+                                  const check = await validateOpenAiKey(key);
+                                  if (!check.valid) return;
+                                  await handleSaveSettings();
+                                }}
+                                disabled={saving || openAiKeyCheck.state === 'checking'}
+                                size="sm"
+                                className="bg-[#00875A] hover:bg-[#00875A]/90"
+                              >
+                                {saving || openAiKeyCheck.state === 'checking' ? <RefreshCcw className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
                                 Salvar Motor
                               </Button>
                             </div>

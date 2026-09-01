@@ -6744,6 +6744,78 @@ async function fetchAndStoreIncomingMedia(
       return jsonResponse({ success: true, results });
     }
 
+    /**
+     * Valida a chave da OpenAI ANTES de salvar.
+     * Era a causa de "IA ativada mas não responde": a chave errada só falhava
+     * lá no webhook (401 invalid_api_key), invisível para o usuário.
+     */
+    if (action === 'validateOpenAiKey') {
+      const rawKey = String(params?.api_key ?? '').trim();
+
+      if (!rawKey) {
+        return jsonResponse({
+          success: true,
+          valid: false,
+          code: 'empty',
+          message: 'Informe a chave da OpenAI (começa com "sk-").',
+        });
+      }
+      if (!/^sk-[A-Za-z0-9_\-]{20,}$/.test(rawKey)) {
+        return jsonResponse({
+          success: true,
+          valid: false,
+          code: 'malformed',
+          message: 'Formato inválido. A chave da OpenAI começa com "sk-" e não contém espaços.',
+        });
+      }
+
+      try {
+        const check = await fetch('https://api.openai.com/v1/models/gpt-4o-mini', {
+          headers: { Authorization: `Bearer ${rawKey}` },
+        });
+
+        if (check.ok) {
+          return jsonResponse({
+            success: true,
+            valid: true,
+            code: 'ok',
+            message: 'API correta — chave válida e com acesso ao modelo gpt-4o-mini.',
+          });
+        }
+
+        const body = await check.json().catch(() => ({} as any));
+        const providerMessage = body?.error?.message || `HTTP ${check.status}`;
+        const codeMap: Record<number, { code: string; message: string }> = {
+          401: { code: 'invalid_api_key', message: 'API ERRADA: a OpenAI recusou esta chave (401). Gere uma nova em platform.openai.com/api-keys.' },
+          403: { code: 'forbidden', message: 'API sem permissão (403): a chave existe mas não pode usar este modelo/projeto.' },
+          404: { code: 'model_not_available', message: 'A chave é válida, mas o projeto não tem acesso ao modelo gpt-4o-mini.' },
+          429: { code: 'quota_or_rate_limit', message: 'Chave sem crédito ou com limite atingido (429). Verifique o faturamento na OpenAI.' },
+        };
+        const mapped = codeMap[check.status] || {
+          code: 'provider_error',
+          message: `A OpenAI respondeu com erro (${check.status}). Tente novamente em instantes.`,
+        };
+
+        return jsonResponse({
+          success: true,
+          valid: false,
+          code: mapped.code,
+          status: check.status,
+          message: mapped.message,
+          provider_message: providerMessage,
+        });
+      } catch (err: any) {
+        return jsonResponse({
+          success: true,
+          valid: false,
+          code: 'network_error',
+          message: 'Não foi possível falar com a OpenAI para validar agora. Verifique a internet do servidor.',
+          provider_message: err?.message || String(err),
+        });
+      }
+    }
+
+
     if (action === 'improvePrompt') {
       const { prompt } = params;
       if (!prompt) throw new Error('Prompt is required');
