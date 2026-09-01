@@ -107,9 +107,14 @@ export async function adminCall<T = Record<string, unknown>>(
   try {
     const response = await fetch(`${baseUrl}/functions/v1/${fn}`, {
       method: "POST",
+      // Porquê: `x-request-id` era um cabeçalho personalizado. O preflight
+      // (OPTIONS) do navegador só é aprovado se o servidor listar TODOS os
+      // cabeçalhos em Access-Control-Allow-Headers — e o gateway da VPS não
+      // listava este. O navegador abortava antes de qualquer resposta e a tela
+      // mostrava "Falha de rede". O requestId continua indo no corpo, que é de
+      // onde o servidor já o lê para idempotência.
       headers: {
         "Content-Type": "application/json",
-        "x-request-id": requestId,
         ...(anonKey ? { apikey: anonKey, Authorization: `Bearer ${anonKey}` } : {}),
       },
       body: JSON.stringify({
@@ -168,8 +173,15 @@ export async function adminCall<T = Record<string, unknown>>(
     if ((error as Error)?.name === "AbortError") {
       throw new AdminApiError("Operação cancelada.", "network");
     }
+    // "Failed to fetch" cobre dois casos muito diferentes: servidor inacessível
+    // e requisição bloqueada pelo navegador (CORS/preflight). Distinguir evita
+    // horas de diagnóstico no lugar errado.
+    const raw = String((error as Error)?.message || "");
+    const blockedByBrowser = /failed to fetch|load failed|networkerror/i.test(raw);
     throw new AdminApiError(
-      "Falha de rede ao contatar o servidor. Verifique a conexão e tente novamente.",
+      blockedByBrowser
+        ? `Não foi possível contatar o servidor (${new URL(baseUrl).host}). Pode ser conexão fora do ar ou bloqueio de CORS/preflight pelo navegador — confira o console e o gateway.`
+        : "Falha de rede ao contatar o servidor. Verifique a conexão e tente novamente.",
       "network"
     );
   } finally {
