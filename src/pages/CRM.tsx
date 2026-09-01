@@ -103,6 +103,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import TemplateBuilder from "@/components/whatsapp/TemplateBuilder";
 import FlowEditor from "@/components/crm/FlowEditor";
+import { FlowSaveOverlay } from "@/components/crm/FlowSaveOverlay";
 import { MediaPopup } from "@/components/MediaPopup";
 import { DocumentPopup } from "@/components/crm/DocumentPopup";
 
@@ -696,6 +697,7 @@ const CRM = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isFlowEditorOpen, setIsFlowEditorOpen] = useState(false);
+  const [flowSaveOverlay, setFlowSaveOverlay] = useState<{ open: boolean; done: boolean }>({ open: false, done: false });
   const [editingFlow, setEditingFlow] = useState<any>(null);
   const [uploadType, setUploadType] = useState<'image' | 'video' | 'audio' | 'document' | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -9850,6 +9852,7 @@ const CRM = () => {
           onClose={() => { setIsFlowEditorOpen(false); setEditingFlow(null); }} 
         />
       )}
+      <FlowSaveOverlay open={flowSaveOverlay.open} done={flowSaveOverlay.done} />
       {previewMedia && (
         <MediaPopup 
           url={previewMedia.url} 
