@@ -74,16 +74,15 @@ estado | jq .
 
 if [ "$MODO" = "--definir-pin" ]; then
   titulo "Definindo o PIN de verificação em duas etapas"
-  r="$(curl -s -m 30 -X POST "$API/$PNID/two_step_verification" \
-        -H "Authorization: Bearer $TOKEN" \
-        -H 'Content-Type: application/json' \
-        -d "{\"pin\":\"$PIN\"}")"
+  # endpoint correto usa query string (?pin=), não corpo JSON
+  r="$(curl -s -m 30 -X POST "$API/$PNID/two_step?pin=$PIN" -H "Authorization: Bearer $TOKEN")"
   echo "$r" | jq .
   if echo "$r" | jq -e '.error' >/dev/null 2>&1; then
-    c_err "falhou ao definir o PIN: $(echo "$r" | jq -r '.error.message')"
-    exit 1
+    c_warn "não foi possível definir o PIN: $(echo "$r" | jq -r '.error.message')"
+    c_warn "em contas SMB/Coexistência isso é esperado — o PIN não se aplica. Seguindo."
+  else
+    c_ok "PIN definido"
   fi
-  c_ok "PIN definido"
 fi
 
 titulo "Registrando o número na Cloud API (/register)"
@@ -96,6 +95,42 @@ echo "$r" | jq .
 if echo "$r" | jq -e '.error' >/dev/null 2>&1; then
   MSG="$(echo "$r" | jq -r '.error.message')"
   SUB="$(echo "$r" | jq -r '.error.error_subcode // empty')"
+
+  if printf '%s' "$MSG" | grep -qi 'not available for SMB'; then
+    c_warn "Esta caixa é SMB / COEXISTÊNCIA (número continua no app WhatsApp Business)."
+    cat <<'FIM'
+
+  O que isso significa (não é erro nosso, e não tem /register):
+   * Números onboardados em Coexistência NÃO passam pelo /register e ficam
+     permanentemente com code_verification_status = NOT_VERIFIED. Isso é normal.
+   * Nesse modo o número continua funcionando no celular; a Cloud API só recebe
+     cópia das conversas SE o app estiver assinando os campos de coexistência.
+
+  Checklist para as mensagens começarem a chegar:
+   1) App Dashboard > WhatsApp > Configuration > Webhook fields — assinar:
+          messages
+          smb_message_echoes        (mensagens enviadas pelo celular)
+          smb_app_state_sync        (contatos/estado do app)
+          history                   (histórico inicial)
+      Sem "messages" + "smb_message_echoes" nada chega nesta caixa.
+   2) O cliente precisa concluir o Embedded Signup até a etapa de sincronizar o
+      app (aceitar no celular: Configurações > Ferramentas comerciais > API).
+      Se ele fechou antes disso, a WABA fica criada mas sem vínculo de conversas.
+   3) No celular, manter o WhatsApp Business aberto/online na primeira sync.
+   4) Depois, reconfirmar com:
+          ./deploy/diagnosticar-um-numero.sh <PHONE_NUMBER_ID>
+
+  Alternativa definitiva (recomendada se ele quer só CRM):
+      migrar o número de verdade para a Cloud API (deixa de funcionar no app):
+      excluir o número da conta SMB e adicioná-lo pelo WhatsApp Manager como
+      número da Cloud API — aí o /register com PIN passa a funcionar.
+FIM
+    titulo "Reassinando o webhook nesta WABA (idempotente)"
+    WABA="$(q1 "select coalesce(meta_waba_id,'') from public.crm_whatsapp_numbers where meta_phone_number_id = '$PNID' limit 1")"
+    [ -n "$WABA" ] && curl -s -m 25 -X POST "$API/$WABA/subscribed_apps" -H "Authorization: Bearer $TOKEN" | jq .
+    exit 0
+  fi
+
   c_err "registro falhou: $MSG (subcode ${SUB:-n/a})"
   cat <<'FIM'
 
