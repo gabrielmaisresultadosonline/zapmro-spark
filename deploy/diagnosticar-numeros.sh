@@ -42,6 +42,40 @@ command -v psql >/dev/null || { c_err "psql não instalado: sudo apt-get install
 [ -n "$(q1 'select 1')" ] || { c_err "Não consegui conectar no banco (container zapmro-db está de pé?)"; exit 1; }
 
 # ---------------------------------------------------------------------------
+# Onde está o e-mail neste banco? Instalações diferentes guardam em lugares
+# diferentes (coluna auth.users.email, metadados, ou nem existe). Detectamos
+# em runtime para nunca abortar os blocos seguintes com "column does not exist".
+EMAIL_EXPR="null::text"
+if [ "$(q1 "select count(*) from information_schema.columns where table_schema='auth' and table_name='users' and column_name='email'")" = "1" ]; then
+  EMAIL_EXPR="p.email"
+elif [ "$(q1 "select count(*) from information_schema.columns where table_schema='auth' and table_name='users' and column_name='raw_user_meta_data'")" = "1" ]; then
+  EMAIL_EXPR="(p.raw_user_meta_data->>'email')"
+  c_warn "  auth.users.email não existe; usando raw_user_meta_data->>'email'"
+else
+  c_warn "  Não há coluna de e-mail em auth.users; o filtro por e-mail será ignorado."
+fi
+
+titulo "0) Versão que está rodando de verdade"
+GIT_COMMIT="$(git -C "$RAIZ" rev-parse --short HEAD 2>/dev/null || echo '?')"
+echo "  commit do repositório: $GIT_COMMIT"
+FN_HOST="$RAIZ/supabase/functions/meta-whatsapp-crm/index.ts"
+if [ -f "$FN_HOST" ]; then
+  echo "  hash no host:      $(sha256sum "$FN_HOST" | cut -c1-16)"
+fi
+if docker ps --format '{{.Names}}' | grep -q '^zapmro-functions$'; then
+  HASH_CONTAINER="$(docker exec zapmro-functions sha256sum /home/deno/functions/meta-whatsapp-crm/index.ts 2>/dev/null | cut -c1-16)"
+  echo "  hash no container: ${HASH_CONTAINER:-nao consegui ler}"
+  echo "  container iniciado em: $(docker inspect -f '{{.State.StartedAt}}' zapmro-functions 2>/dev/null)"
+  if [ -f "$FN_HOST" ] && [ -n "${HASH_CONTAINER:-}" ]; then
+    if [ "$(sha256sum "$FN_HOST" | cut -c1-16)" = "$HASH_CONTAINER" ]; then
+      c_ok "  OK  container está com o MESMO código do repositório"
+    else
+      c_err "  DIVERGENTE  o container roda código antigo -> docker compose -f deploy/postgres-stack/docker-compose.yml up -d --force-recreate functions"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 titulo "1) Migração de isolamento por número (088)"
 for t in crm_contacts crm_messages; do
   tem="$(q1 "select count(*) from information_schema.columns where table_schema='public' and table_name='$t' and column_name='whatsapp_number_id'")"
@@ -49,10 +83,18 @@ for t in crm_contacts crm_messages; do
   else c_err "  FALTA  $t.whatsapp_number_id -> rode ./deploy/atualizar.sh para aplicar o SQL 088"; fi
 done
 
+IDX_OK="$(q1 "select count(*) from pg_indexes where schemaname='public' and indexname='crm_contacts_wa_user_number_uidx'")"
+if [ "${IDX_OK:-0}" = "1" ]; then
+  c_ok "  OK  índice único não-parcial (089) presente — upsert de contato funciona"
+else
+  c_err "  FALTA  índice crm_contacts_wa_user_number_uidx (SQL 089) -> mensagens recebidas falham com erro de ON CONFLICT"
+fi
+
 # ---------------------------------------------------------------------------
 titulo "2) Números cadastrados e credenciais"
 FILTRO_SQL="true"
-[ -n "$FILTRO_EMAIL" ] && FILTRO_SQL="lower(p.email) = lower('$FILTRO_EMAIL')"
+[ -n "$FILTRO_EMAIL" ] && FILTRO_SQL="lower(coalesce($EMAIL_EXPR,'')) = lower('$FILTRO_EMAIL')"
+
 
 q "
 select
