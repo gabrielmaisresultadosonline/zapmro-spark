@@ -86,7 +86,8 @@ with caixas as (
 FILTRO="(
      c.pnid = '$ALVO'
   or ( '$SUFIXO' <> '' and regexp_replace(c.fone, '[^0-9]', '', 'g') like '%${SUFIXO}' )
-  or lower(coalesce($EMAIL_EXPR,'')) = lower('$ALVO')
+  or lower(coalesce($EMAIL_EXPR,'')) like '%' || lower('$ALVO') || '%'
+  or lower(coalesce(c.label,'')) like '%' || lower('$ALVO') || '%'
 )"
 
 titulo "1) Cadastro do número"
