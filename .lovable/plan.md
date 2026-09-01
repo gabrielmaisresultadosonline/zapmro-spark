@@ -1,53 +1,40 @@
-# Correção: mensagem enviada não fica salva no chat (multi-número)
+# Corrigir /admincentral: "Falha de rede ao contatar o servidor"
 
-## Diagnóstico
+## Diagnóstico (causa raiz encontrada)
 
-Os logs mostram o WhatsApp funcionando: webhook recebe, eco do celular é salvo, status `delivered` chega. O problema não é a Meta — é **onde a mensagem enviada é gravada** depois que passamos a separar conversas por número (caixa).
+O login entra (validação local por hash), mas **nenhuma leitura carrega**. O motivo não é o servidor estar fora: é o **CORS preflight** sendo recusado.
 
-Três falhas encontradas no código:
+- `src/lib/adminCentralApi.ts` envia o cabeçalho personalizado `x-request-id` em toda chamada.
+- Um cabeçalho personalizado força o navegador a fazer um `OPTIONS` (preflight) antes do `POST`.
+- O gateway da VPS (`deploy/postgres-stack/nginx.conf`) responde `Access-Control-Allow-Headers` com uma lista fixa que **não inclui `x-request-id`**. As Edge Functions (`crm-central-admin`, `crm-central-admin-login`) também não incluem.
+- O navegador então aborta a requisição **antes de qualquer resposta**. O `fetch` lança `TypeError`, que o cliente traduz exatamente como "Falha de rede ao contatar o servidor".
 
-1. **`sendMessage` no servidor ignora o número aberto.**
-   Em `supabase/functions/meta-whatsapp-crm/index.ts` (ação `sendMessage`), o contato é buscado apenas por `wa_id + user_id`, sem `whatsapp_number_id`, ordenado por `last_message_received_at`. Num cadastro com 2 números, o mesmo cliente tem 2 linhas de contato — o envio grava na linha da **outra** caixa. A mensagem sai no WhatsApp, mas a conversa aberta na tela nunca a mostra.
+Ou seja: acessa a tela, mas toda ação (listar contatos, liberar plano, travar, excluir) morre no preflight.
 
-2. **Mensagens gravadas sem `whatsapp_number_id`.**
-   Os `insert` em `crm_messages` de `internalSendMessage` e `internalSendTemplate` não preenchem a coluna da caixa. Todas as telas escopadas por número (prévia da lista, contadores, estatísticas, realtime) ficam sem esses registros.
+## Correção
 
-3. **Áudio enviado pela tela grava sem `user_id`.**
-   Em `src/pages/CRM.tsx`, o insert de áudio manual não envia `user_id` nem `whatsapp_number_id`, enquanto `fetchMessages` filtra `.eq('user_id', ...)`. Resultado: o áudio aparece na hora (otimista) e desaparece ao recarregar.
+1. **Cliente (efeito imediato, sem depender da VPS)** — `src/lib/adminCentralApi.ts`
+   - Remover o cabeçalho `x-request-id` do `fetch`. O `requestId` continua indo **no corpo** (o servidor já o lê de lá para idempotência), então nada de comportamento se perde.
+   - Sem cabeçalho personalizado, a requisição volta a ser "simples" e não exige preflight.
 
-O ruído `[GOOGLE-SYNC] 403` é independente (tokens sem escopo de Contatos) e será silenciado no caminho de deduplicação, que ainda não respeita o circuit breaker.
+2. **Gateway (defensivo)** — `deploy/postgres-stack/nginx.conf`
+   - Acrescentar `x-request-id` (e `x-admin-session`) na lista de `Access-Control-Allow-Headers` dos blocos `/functions/v1/`, `/rest/v1/` e `/auth/v1/`, tanto na resposta normal quanto no ramo `OPTIONS`.
 
-## O que será feito
+3. **Edge Functions (defensivo)** — `crm-central-admin` e `crm-central-admin-login`
+   - Padronizar `Access-Control-Allow-Headers` incluindo `x-request-id`, para o caso de a função ser chamada sem passar pelo Nginx.
 
-### 1. Envio escopado por caixa (servidor)
-- `sendMessage` e `sendTemplate` passam a receber `whatsapp_number_id` do frontend; quando ausente, resolvem a caixa pelo `meta_phone_number_id` consultando `crm_whatsapp_numbers` (mesma lógica já usada pelo webhook).
-- Busca do contato filtrada pela caixa; criação de contato já com `whatsapp_number_id`.
-- Fallback seguro: se nenhuma caixa for resolvida, comportamento atual é mantido (contas de número único não regridem).
+4. **Mensagem de erro mais útil** — `src/lib/adminCentralApi.ts`
+   - Diferenciar "bloqueado pelo navegador (CORS/preflight)" de "servidor inacessível", para que um problema desse tipo seja identificável na primeira leitura, em vez de virar um genérico "falha de rede".
 
-### 2. Gravação completa da mensagem
-- `internalSendMessage` e `internalSendTemplate` gravam `whatsapp_number_id` (herdado do contato quando o parâmetro não vier) e `user_id` sempre preenchido.
-
-### 3. Frontend
-- Todas as chamadas de envio (texto, mídia, áudio, template) passam o número ativo.
-- Insert de áudio manual inclui `user_id` e `whatsapp_number_id`.
-
-### 4. Migração 093 — reparo dos dados já gravados
-- Preenche `crm_messages.whatsapp_number_id` a partir do contato quando nulo.
-- Preenche `crm_messages.user_id` nulo a partir do contato.
-- Índice em `(contact_id, created_at)` conferido para manter o chat rápido.
-
-### 5. Silenciar 403 do Google
-- A rotina de deduplicação marca a conta como `reconnect_required` no primeiro erro de escopo, igual ao push, parando a repetição no log.
-
-## Como validar na VPS
+## Aplicação na VPS
 
 ```bash
 cd /var/www/ia-mro && git fetch origin && git reset --hard origin/main
 chmod +x deploy/*.sh && ./deploy/atualizar.sh
-docker logs -f --since 2m zapmro-functions | grep -iE 'META-SEND|FLOW-LOG|093'
 ```
 
-Depois: abrir `/crm` no número onde falhava, enviar texto e áudio, recarregar a página — as duas mensagens devem permanecer no histórico da conversa correta.
+O item 1 já resolve o acesso mesmo antes do Nginx ser recarregado; os itens 2 e 3 entram junto no `atualizar.sh`.
 
-## Limite honesto
-Mensagens antigas que foram gravadas na caixa errada continuam na conversa da outra caixa; a migração preenche a coluna faltante, mas não adivinha a caixa de origem quando o contato já estava errado. Se quiser, posso adicionar depois uma rotina de realocação por `meta_message_id`.
+## Escopo
+
+Sem alteração de banco, de RLS ou de qualquer lógica de negócio do CRM/WhatsApp. Somente transporte HTTP/CORS do `/admincentral`.
