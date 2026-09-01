@@ -7698,6 +7698,14 @@ const CRM = () => {
                               return;
                             }
 
+                            // Nunca ligar a I.A. com API errada — era o cenário
+                            // "ativada mas não responde" (401 invalid_api_key).
+                            const keyCheck = await validateOpenAiKey(
+                              String(metaSettings.openai_api_key).trim()
+                            );
+                            if (!keyCheck.valid) return;
+
+
                             if (!metaSettings.business_description || metaSettings.business_description.length < 10) {
                               toast({
                                 title: "Cérebro não configurado",
