@@ -7912,8 +7912,20 @@ const CRM = () => {
                               >
                                 <LinkIcon className="w-4 h-4 mr-2" /> OpenAI Token
                               </Button>
-                              <Button onClick={() => handleSaveSettings()} disabled={saving} size="sm" className="bg-[#00875A] hover:bg-[#00875A]/90">
-                                {saving ? <RefreshCcw className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
+                              <Button
+                                onClick={async () => {
+                                  // Bloqueia o save quando a API está errada: antes a
+                                  // chave inválida só aparecia como 401 no webhook.
+                                  const key = String(metaSettings.openai_api_key || '').trim();
+                                  const check = await validateOpenAiKey(key);
+                                  if (!check.valid) return;
+                                  await handleSaveSettings();
+                                }}
+                                disabled={saving || openAiKeyCheck.state === 'checking'}
+                                size="sm"
+                                className="bg-[#00875A] hover:bg-[#00875A]/90"
+                              >
+                                {saving || openAiKeyCheck.state === 'checking' ? <RefreshCcw className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
                                 Salvar Motor
                               </Button>
                             </div>
