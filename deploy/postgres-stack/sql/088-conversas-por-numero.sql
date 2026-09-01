@@ -99,3 +99,51 @@ BEGIN
 EXCEPTION WHEN others THEN
   RAISE NOTICE 'FK crm_messages_whatsapp_number_fk ignorada: %', SQLERRM;
 END $$;
+
+-- 5) Preenchimento automático (garante que nada fique sem número) ---------
+CREATE OR REPLACE FUNCTION public.crm_fill_contact_number()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.whatsapp_number_id IS NULL AND NEW.user_id IS NOT NULL THEN
+    SELECT n.id INTO NEW.whatsapp_number_id
+    FROM public.crm_whatsapp_numbers n
+    LEFT JOIN public.crm_settings s ON s.user_id = n.user_id
+    WHERE n.user_id = NEW.user_id
+    ORDER BY (s.meta_phone_number_id IS NOT NULL
+              AND n.meta_phone_number_id = s.meta_phone_number_id) DESC,
+             n.created_at ASC
+    LIMIT 1;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS crm_contacts_fill_number ON public.crm_contacts;
+CREATE TRIGGER crm_contacts_fill_number
+  BEFORE INSERT ON public.crm_contacts
+  FOR EACH ROW EXECUTE FUNCTION public.crm_fill_contact_number();
+
+CREATE OR REPLACE FUNCTION public.crm_fill_message_number()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NEW.whatsapp_number_id IS NULL AND NEW.contact_id IS NOT NULL THEN
+    SELECT c.whatsapp_number_id INTO NEW.whatsapp_number_id
+    FROM public.crm_contacts c
+    WHERE c.id = NEW.contact_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS crm_messages_fill_number ON public.crm_messages;
+CREATE TRIGGER crm_messages_fill_number
+  BEFORE INSERT ON public.crm_messages
+  FOR EACH ROW EXECUTE FUNCTION public.crm_fill_message_number();
