@@ -23,6 +23,18 @@
 # ============================================================================
 set -uo pipefail
 
+# Blindagem contra paginador: se a saída for um terminal, re-executa gravando em
+# arquivo e ecoando com "cat" (nenhum less/more pode capturar a tela).
+if [ -t 1 ] && [ -z "${ZAPMRO_SEM_PAGER:-}" ]; then
+  LOG="/tmp/zapmro-diagnostico-$(date +%Y%m%d-%H%M%S).log"
+  export ZAPMRO_SEM_PAGER=1 PAGER=cat PSQL_PAGER=cat GIT_PAGER=cat SYSTEMD_PAGER=cat LESS=FRX
+  "$0" "$@" 2>&1 | tee "$LOG" | cat
+  st=${PIPESTATUS[0]}
+  printf '\nsaída completa também salva em: %s\n' "$LOG"
+  exit "$st"
+fi
+export PAGER=cat PSQL_PAGER=cat LESS=FRX
+
 ALVO="${1:-}"
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$RAIZ/deploy/postgres-stack/.env"
