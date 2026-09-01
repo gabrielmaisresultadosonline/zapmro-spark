@@ -698,6 +698,9 @@ const CRM = () => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isFlowEditorOpen, setIsFlowEditorOpen] = useState(false);
   const [flowSaveOverlay, setFlowSaveOverlay] = useState<{ open: boolean; done: boolean }>({ open: false, done: false });
+  // Após trocar/desconectar um número, forçamos a lista de WhatsApps conectados
+  // (nunca o Embedded Signup direto) até o usuário escolher uma caixa.
+  const [forceNumberSelector, setForceNumberSelector] = useState(false);
   const [editingFlow, setEditingFlow] = useState<any>(null);
   const [uploadType, setUploadType] = useState<'image' | 'video' | 'audio' | 'document' | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -4954,6 +4957,7 @@ const CRM = () => {
     contactsSeededRef.current = false;
     lastContactsSyncRef.current = null;
     setActiveNumberId(null);
+    setForceNumberSelector(true);
   };
   // Se o cadastro já tem números salvos, NUNCA forçamos o Embedded Signup:
   // mostramos o seletor para o usuário escolher um número existente (ou
@@ -4964,7 +4968,7 @@ const CRM = () => {
     !loading &&
     multiNumberEnabled &&
     currentUserId &&
-    (!activeNumberId || (!isWhatsAppConnected && hasSavedNumbers))
+    (forceNumberSelector || !activeNumberId || (!isWhatsAppConnected && hasSavedNumbers))
   ) {
     return (
       <WhatsAppNumberSelector
@@ -4973,6 +4977,7 @@ const CRM = () => {
         onSelected={(record: WhatsAppNumberRecord) => {
           // Fixa o escopo ANTES de qualquer consulta para não misturar caixas.
           activeNumberIdRef.current = record.id;
+          setForceNumberSelector(false);
           setActiveWhatsAppNumberId(record.id);
           setContacts([]);
           setSelectedContact(null);
@@ -5310,7 +5315,7 @@ const CRM = () => {
                  )}
                </h1>
             </div>
-            {activeTab === 'contacts' && (
+            {(activeTab === 'contacts' || activeTab === 'dashboard') && (
               <div className="flex items-center gap-1.5 md:gap-3">
                 {multiNumberEnabled && (
                   <Button
@@ -5324,7 +5329,7 @@ const CRM = () => {
                     TROCAR WHATSAPP
                   </Button>
                 )}
-                <Button 
+                {activeTab === 'contacts' && (<><Button 
                   variant={activeFlowsView ? "default" : "outline"} 
                   size="sm" 
                   onClick={() => { setActiveFlowsView(!activeFlowsView); setKanbanView(false); }} 
@@ -5346,7 +5351,7 @@ const CRM = () => {
                 >
                   {kanbanView ? <MessageSquare className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" /> : <BarChart3 className="w-3 h-3 md:w-4 md:h-4 mr-1 md:mr-2" />}
                   {kanbanView ? 'LISTA' : 'CRM'}
-                </Button>
+                </Button></>)}
               </div>
             )}
           </header>
