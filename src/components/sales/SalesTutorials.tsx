@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Play, ExternalLink, BookOpen, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/mediaUrl";
+import { prefetchVideo, videoPrefetchHandlers } from "@/lib/videoPrefetch";
 
 type Module = {
   id: string;
