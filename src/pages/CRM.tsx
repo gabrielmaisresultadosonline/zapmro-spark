@@ -143,6 +143,10 @@ import {
   syncSettingsIntoNumbers,
   type WhatsAppNumberRecord,
 } from "@/lib/whatsappNumbers";
+import {
+  getActiveWhatsAppNumberId,
+  setActiveWhatsAppNumberId,
+} from "@/lib/activeNumberContext";
 
 const getCanonicalConversationPhone = (rawPhone: unknown): string => {
   const digits = String(rawPhone ?? '').replace(/\D/g, '');
@@ -580,6 +584,27 @@ const CRM = () => {
   const [flows, setFlows] = useState<any[]>([]);
   const [contacts, setContacts] = useState<any[]>([]);
   const currentUserIdRef = useRef<string | null>(null);
+  // Multi-WhatsApp: número aberto agora. Cada número tem contatos, mensagens e
+  // histórico próprios (coluna whatsapp_number_id), então TODA consulta e todo
+  // insert de conversa é filtrado por ele.
+  const activeNumberIdRef = useRef<string | null>(getActiveWhatsAppNumberId());
+  /** Aplica o filtro do número aberto em qualquer query builder do Supabase. */
+  const scopeToNumber = <T,>(query: T): T => {
+    const numberId = activeNumberIdRef.current;
+    if (!numberId) return query;
+    return (query as any).eq('whatsapp_number_id', numberId) as T;
+  };
+  /** Campos de escopo para inserts de contatos/mensagens. */
+  const numberScopePatch = (): { whatsapp_number_id?: string } =>
+    activeNumberIdRef.current ? { whatsapp_number_id: activeNumberIdRef.current } : {};
+  /** Ignora eventos de realtime que pertencem a outro número do mesmo cadastro. */
+  const belongsToActiveNumber = (row: any): boolean => {
+    const numberId = activeNumberIdRef.current;
+    if (!numberId) return true;
+    const rowNumber = row?.whatsapp_number_id;
+    // Registros antigos (sem número) continuam visíveis até o backfill rodar.
+    return !rowNumber || rowNumber === numberId;
+  };
   // Per-contact inbound message timestamps (last 7 days) used to compute
   // unread counts shown as a yellow badge on the conversation list.
   const [inboundTimestampsByContact, setInboundTimestampsByContact] = useState<Record<string, string[]>>({});
