@@ -5166,7 +5166,7 @@ async function fetchAndStoreIncomingMedia(
                  if (updatedContact) {
                      // Adicionamos um pequeno delay para garantir que a mensagem de abertura foi entregue antes da IA responder
                      await new Promise(r => setTimeout(r, 2000));
-                     await processAiAgentResponse(supabase, updatedContact, contact.wa_id, undefined, undefined, contact.user_id, contact.whatsapp_number_id || null);
+                     await processAiAgentResponse(supabase, updatedContact, contact.wa_id, undefined, undefined, contact.user_id, (contact as any).whatsapp_number_id || null);
                  }
               }
             } else {
