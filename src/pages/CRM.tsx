@@ -442,6 +442,8 @@ const CRM = () => {
    */
   const [openAiKeyCheck, setOpenAiKeyCheck] = useState<{
     state: 'idle' | 'checking' | 'valid' | 'invalid';
+    /** Código devolvido pelo servidor: `no_credits`, `invalid_api_key`, etc. */
+    code?: string;
     message?: string;
     detail?: string;
   }>({ state: 'idle' });
