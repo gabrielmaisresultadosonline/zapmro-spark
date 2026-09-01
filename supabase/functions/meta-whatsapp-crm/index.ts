@@ -493,30 +493,77 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
   }
 }
 
- async function processAiAgentResponse(supabase: any, contact: any, waId: string, text?: string, sourceMessageId?: string, userId?: string) {
-  const aiRunId = crypto.randomUUID().slice(0, 8);
-  const aiLog = (stage: string, details: Record<string, unknown> = {}) => {
-    console.log('[AI-AUTO]', JSON.stringify({
-      run_id: aiRunId,
-      stage,
-      wa_id: waId,
-      contact_id: contact?.id || null,
-      user_id: userId || contact?.user_id || null,
-      source_message_id: sourceMessageId || null,
-      ...details,
-    }));
-  };
-  aiLog('processing_started', {
-    ai_active: contact?.ai_active === true,
-    flow_state: contact?.flow_state || null,
-    has_input_text: Boolean(text),
-  });
-  let messageText = text;
+  async function processAiAgentResponse(
+   supabase: any,
+   contact: any,
+   waId: string,
+   text?: string,
+   sourceMessageId?: string,
+   userId?: string,
+   /**
+    * Caixa (número de WhatsApp) que deve responder. Sem isto o agente usava
+    * sempre as credenciais de `crm_settings` (número principal): em cadastros
+    * com 2+ números a resposta saía pelo número errado — ou nem saía, porque
+    * `crm_settings` não guarda credencial dos números secundários. Era a causa
+    * de "IA ativada mas não responde nada".
+    */
+   whatsappNumberId?: string | null,
+ ) {
+   const aiRunId = crypto.randomUUID().slice(0, 8);
+   const aiLog = (stage: string, details: Record<string, unknown> = {}) => {
+     console.log('[AI-AUTO]', JSON.stringify({
+       run_id: aiRunId,
+       stage,
+       wa_id: waId,
+       contact_id: contact?.id || null,
+       user_id: userId || contact?.user_id || null,
+       source_message_id: sourceMessageId || null,
+       whatsapp_number_id: whatsappNumberId || contact?.whatsapp_number_id || null,
+       ...details,
+     }));
+   };
+   aiLog('processing_started', {
+     ai_active: contact?.ai_active === true,
+     flow_state: contact?.flow_state || null,
+     has_input_text: Boolean(text),
+   });
+   let messageText = text;
 
-    const { data: aiSettings, error: settingsError } = await supabase.from('crm_settings').select('openai_api_key, meta_phone_number_id, meta_access_token, vps_transcoder_url, ai_agent_enabled, business_description, ai_system_prompt').eq('user_id', userId).maybeSingle();
+    const { data: baseSettings, error: settingsError } = await supabase.from('crm_settings').select('openai_api_key, meta_phone_number_id, meta_access_token, vps_transcoder_url, ai_agent_enabled, business_description, ai_system_prompt').eq('user_id', userId).maybeSingle();
   
   if (settingsError) {
     console.error(`[AI-AGENT] Error fetching settings for user ${userId}:`, settingsError);
+  }
+
+  // Credenciais da caixa correta. `crm_whatsapp_numbers` é a fonte de verdade
+  // por número; `crm_settings` fica só como compatibilidade (cadastro antigo).
+  const boxId = whatsappNumberId || contact?.whatsapp_number_id || null;
+  let aiSettings: any = baseSettings;
+  if (boxId) {
+    const { data: boxRow, error: boxErr } = await supabase
+      .from('crm_whatsapp_numbers')
+      .select('id, meta_phone_number_id, meta_access_token, meta_waba_id, meta_display_phone_number, is_active')
+      .eq('id', boxId)
+      .maybeSingle();
+    if (boxErr) console.error('[AI-AGENT] Falha ao carregar credenciais da caixa', boxId, boxErr.message);
+    if (boxRow?.meta_phone_number_id && boxRow?.meta_access_token) {
+      aiSettings = applyNumberToSettings(baseSettings, boxRow);
+      aiLog('credentials_resolved', {
+        source: 'crm_whatsapp_numbers',
+        phone_number_id: boxRow.meta_phone_number_id,
+        display: boxRow.meta_display_phone_number || null,
+      });
+    } else {
+      aiLog('credentials_fallback_settings', {
+        reason: boxRow ? 'box_without_credentials' : 'box_not_found',
+        has_settings_credentials: Boolean(baseSettings?.meta_phone_number_id && baseSettings?.meta_access_token),
+      });
+    }
+  } else {
+    aiLog('credentials_fallback_settings', {
+      reason: 'no_box_id',
+      has_settings_credentials: Boolean(baseSettings?.meta_phone_number_id && baseSettings?.meta_access_token),
+    });
   }
 
   const manualAiActivation = contact?.metadata?.manual_ai_activation === true;
@@ -527,6 +574,18 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
     });
     console.log(`[AI-AGENT] Ignorado para ${waId}: ativação geral desligada e conversa sem ativação manual.`);
     return { success: true, skipped: 'ai_not_enabled_for_contact' };
+  }
+
+  if (!aiSettings?.meta_phone_number_id || !aiSettings?.meta_access_token) {
+    // Sem credencial não há como responder. Antes isto virava um throw genérico
+    // ("Credenciais Meta não configuradas") no fim da função e ficava invisível.
+    aiLog('failed_missing_meta_credentials', {
+      box_id: boxId,
+      has_phone_number_id: Boolean(aiSettings?.meta_phone_number_id),
+      has_access_token: Boolean(aiSettings?.meta_access_token),
+    });
+    console.error(`[AI-AGENT] Sem credenciais Meta para responder ${waId} (caixa ${boxId || 'não resolvida'}).`);
+    return { success: false, error: 'meta_credentials_missing', whatsapp_number_id: boxId };
   }
 
   const OPENAI_API_KEY = aiSettings?.openai_api_key || Deno.env.get('OPENAI_API_KEY');
