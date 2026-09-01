@@ -193,13 +193,17 @@ export default function SalesTutorials({ variant = "light" }: SalesTutorialsProp
                       </div>
                     )}
                     <video
+                      key={active.id}
                       src={resolveMediaUrl(active.video_url)}
                       poster={resolveMediaUrl(active.cover_url) || undefined}
                       controls
                       autoPlay
                       playsInline
-                      preload="metadata"
+                      // "auto" pede o buffer inicial de imediato; com o prefetch do card
+                      // o começo do arquivo normalmente já está em cache HTTP.
+                      preload="auto"
                       controlsList="nodownload"
+                      onLoadedMetadata={() => setVideoLoading(false)}
                       onLoadedData={() => setVideoLoading(false)}
                       onCanPlay={() => setVideoLoading(false)}
                       onWaiting={() => setVideoLoading(true)}
