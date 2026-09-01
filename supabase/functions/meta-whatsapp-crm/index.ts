@@ -2841,11 +2841,23 @@ async function pushPendingContactsToGoogle(supabase: any, userId: string, settin
           console.error(`[GOOGLE-SYNC] Falha ao renovar token da conta ${account.email}:`, JSON.stringify(refreshTokens));
           lastError = `Token expirado (${account.email}). Reconecte esta conta.`;
           reconnectAccounts.push(account.email);
+          await markGoogleAccountReconnectRequired(
+            supabase,
+            account.id,
+            'REFRESH_FAILED',
+            `Falha ao renovar token: ${refreshTokens?.error_description || refreshTokens?.error || 'erro desconhecido'}`,
+          );
           continue;
         }
       } else {
         lastError = `Sem refresh token (${account.email}). Reconecte esta conta.`;
         reconnectAccounts.push(account.email);
+        await markGoogleAccountReconnectRequired(
+          supabase,
+          account.id,
+          'NO_REFRESH_TOKEN',
+          'Conta sem refresh token. É necessário reconectar concedendo acesso aos Contatos.',
+        );
         continue;
       }
     }
@@ -2859,10 +2871,23 @@ async function pushPendingContactsToGoogle(supabase: any, userId: string, settin
     } catch (error: any) {
       lastError = error?.message || String(error);
       console.error(`[GOOGLE-SYNC] Não foi possível deduplicar a conta ${account.email}:`, lastError);
+      // 403 por escopo insuficiente é permanente: o refresh_token salvo não
+      // tem permissão de escrita em Contatos. Sem circuit breaker, o cron
+      // repetiria esse erro a cada minuto para sempre.
+      if (isGoogleInsufficientScopeError(lastError)) {
+        reconnectAccounts.push(account.email);
+        await markGoogleAccountReconnectRequired(
+          supabase,
+          account.id,
+          'INSUFFICIENT_SCOPE',
+          `Permissão de Contatos ausente (${account.email}). Reconecte a conta autorizando o acesso aos Contatos.`,
+        );
+      }
       // Segurança: se não foi possível conferir o Google, não crie nada. É
       // preferível manter pendente a duplicar milhares de contatos.
       continue;
     }
+
 
     const alreadyOnGoogle = forThisAccount.filter((contact: any) =>
       googleContactsByPhone.has(canonicalBrazilianWaId(contact.wa_id))
