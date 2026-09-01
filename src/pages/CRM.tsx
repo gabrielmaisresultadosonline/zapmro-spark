@@ -1074,9 +1074,11 @@ const CRM = () => {
       const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      const { data: monthMsgs } = await supabase
-        .from('crm_messages')
-        .select('contact_id, direction, created_at, metadata')
+      const { data: monthMsgs } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id, direction, created_at, metadata')
+      )
         .gte('created_at', startOfMonth)
         .order('created_at', { ascending: true });
 
@@ -1121,18 +1123,22 @@ const CRM = () => {
         }
       });
 
-      const { data: recent } = await supabase
-        .from('crm_messages')
-        .select('contact_id, direction, created_at')
+      const { data: recent } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id, direction, created_at')
+      )
         .eq('direction', 'inbound')
         .gte('created_at', since24h);
 
       const activeSet = new Set<string>();
       (recent || []).forEach((m: any) => m.contact_id && activeSet.add(m.contact_id));
 
-      const { data: recentWeek } = await supabase
-        .from('crm_messages')
-        .select('contact_id')
+      const { data: recentWeek } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id')
+      )
         .eq('direction', 'inbound')
         .gte('created_at', startOfWeek);
       const activeWeekSet = new Set<string>();
@@ -1214,9 +1220,11 @@ const CRM = () => {
       }
 
       if (type === 'paid' || type === 'weekly_paid') {
-        const { data: msgs } = await supabase
-          .from('crm_messages')
-          .select('contact_id, direction, created_at, metadata')
+        const { data: msgs } = await scopeToNumber(
+          supabase
+            .from('crm_messages')
+            .select('contact_id, direction, created_at, metadata')
+        )
           .gte('created_at', startTime)
           .order('created_at', { ascending: true });
 
@@ -1258,9 +1266,11 @@ const CRM = () => {
         setMetricsListData(contactDetails || []);
       } else {
         const filterTime = (type === 'active') ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() : startTime;
-        const { data: recent } = await supabase
-          .from('crm_messages')
-          .select('contact_id')
+        const { data: recent } = await scopeToNumber(
+          supabase
+            .from('crm_messages')
+            .select('contact_id')
+        )
           .eq('direction', 'inbound')
           .gte('created_at', filterTime);
         
@@ -1604,7 +1614,7 @@ const CRM = () => {
           setSelectedContact(null);
           setChatMessages([]);
           messagesCacheRef.current = {};
-          contactsCacheKeyRef.current = `crm_contacts_cache_v3_${nextUserId}`;
+          contactsCacheKeyRef.current = `crm_contacts_cache_v3_${nextUserId}_${activeNumberIdRef.current || 'default'}`;
           contactsSeededRef.current = false;
           lastContactsSyncRef.current = null;
         }
@@ -1895,7 +1905,7 @@ const CRM = () => {
       }
       currentUserIdRef.current = userId;
       // Resolve cache key once per user
-      contactsCacheKeyRef.current = `crm_contacts_cache_v3_${userId}`;
+      contactsCacheKeyRef.current = `crm_contacts_cache_v3_${userId}_${activeNumberIdRef.current || 'default'}`;
       const cacheKey = contactsCacheKeyRef.current;
       const now = Date.now();
 
@@ -1932,10 +1942,12 @@ const CRM = () => {
       let pageError = false;
 
       for (let page = 0; page < MAX_PAGES; page++) {
-        let q = supabase
-          .from('crm_contacts')
-          .select('*')
-          .eq('user_id', userId)
+        let q = scopeToNumber(
+          supabase
+            .from('crm_contacts')
+            .select('*')
+            .eq('user_id', userId)
+        )
           .order('updated_at', { ascending: false })
           .range(from, from + pageSize - 1);
 
@@ -2029,10 +2041,12 @@ const CRM = () => {
   const fetchInboundTimestamps = async () => {
     try {
       const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const { data } = await supabase
-        .from('crm_messages')
-        .select('contact_id, created_at')
-        .eq('user_id', currentUserIdRef.current ?? '')
+      const { data } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id, created_at')
+          .eq('user_id', currentUserIdRef.current ?? '')
+      )
         .eq('direction', 'inbound')
         .gte('created_at', since)
         .order('created_at', { ascending: false });
