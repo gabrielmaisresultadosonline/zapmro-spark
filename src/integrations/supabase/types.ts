@@ -875,6 +875,7 @@ export type Database = {
           updated_at: string | null
           user_id: string | null
           wa_id: string
+          whatsapp_number_id: string | null
         }
         Insert: {
           ai_active?: boolean | null
@@ -915,6 +916,7 @@ export type Database = {
           updated_at?: string | null
           user_id?: string | null
           wa_id: string
+          whatsapp_number_id?: string | null
         }
         Update: {
           ai_active?: boolean | null
@@ -955,6 +957,7 @@ export type Database = {
           updated_at?: string | null
           user_id?: string | null
           wa_id?: string
+          whatsapp_number_id?: string | null
         }
         Relationships: [
           {
@@ -1209,6 +1212,7 @@ export type Database = {
           metadata: Json | null
           status: string | null
           user_id: string | null
+          whatsapp_number_id: string | null
         }
         Insert: {
           contact_id?: string | null
@@ -1227,6 +1231,7 @@ export type Database = {
           metadata?: Json | null
           status?: string | null
           user_id?: string | null
+          whatsapp_number_id?: string | null
         }
         Update: {
           contact_id?: string | null
@@ -1245,6 +1250,7 @@ export type Database = {
           metadata?: Json | null
           status?: string | null
           user_id?: string | null
+          whatsapp_number_id?: string | null
         }
         Relationships: [
           {

@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { setActiveWhatsAppNumberId } from "@/lib/activeNumberContext";
 
 /**
  * Suporte a múltiplos números de WhatsApp dentro do mesmo cadastro.
@@ -44,6 +45,17 @@ export function setActiveNumberId(userId: string, numberId: string | null) {
   } catch {
     /* storage indisponível — segue sem persistir */
   }
+  // Espelha no contexto global usado pelas consultas e pelas Edge Functions.
+  setActiveWhatsAppNumberId(numberId);
+}
+
+/** Busca um número específico do cadastro (usado ao restaurar a escolha). */
+export async function fetchNumberById(
+  userId: string,
+  numberId: string
+): Promise<WhatsAppNumberRecord | null> {
+  const numbers = await fetchUserNumbers(userId);
+  return numbers.find((n) => n.id === numberId) ?? null;
 }
 
 export function isNumberUnlocked(userId: string, numberId: string): boolean {

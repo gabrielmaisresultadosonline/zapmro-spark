@@ -1138,6 +1138,20 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
     return jsonResponse({ success: true, ignored: 'missing_user' });
   }
 
+  // Número (caixa) que recebeu esta mensagem. Cada número tem sua própria
+  // base de contatos/mensagens, então tudo abaixo é gravado com este escopo.
+  const inboundNumberRow = await getWhatsAppNumberByPhoneId(
+    supabase,
+    webhookPhoneNumberId,
+    webhookWabaId,
+  );
+  const inboundNumberId: string | null =
+    inboundNumberRow?.user_id === userId ? inboundNumberRow.id : null;
+  /** Restringe a consulta ao número da caixa quando ele é conhecido. */
+  const scopeNumber = <T,>(query: T): T =>
+    inboundNumberId ? ((query as any).eq('whatsapp_number_id', inboundNumberId) as T) : query;
+  const numberPatch = inboundNumberId ? { whatsapp_number_id: inboundNumberId } : {};
+
   if (Array.isArray(value.statuses) && value.statuses.length > 0) {
     const results = [];
     for (const statusEvent of value.statuses) {
@@ -1265,11 +1279,13 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
     // to fire the wrong flow when the customer's auto-reply arrived.
     const hasReferral = !!getReferralFromWebhookMessage(message);
     const variants = getBrazilianPhoneVariants(waId);
-    const { data: existingContactForCtwa } = await supabase
-      .from('crm_contacts')
-      .select('id, total_messages_received, last_message_received_at')
-      .in('wa_id', variants)
-      .eq('user_id', userId)
+    const { data: existingContactForCtwa } = await scopeNumber(
+      supabase
+        .from('crm_contacts')
+        .select('id, total_messages_received, last_message_received_at')
+        .in('wa_id', variants)
+        .eq('user_id', userId)
+    )
       .order('last_message_received_at', { ascending: false, nullsFirst: true })
       .limit(1)
       .maybeSingle();
@@ -1353,11 +1369,13 @@ else if (message.type === "unsupported") {
   }
 
    const variantsForSave = getBrazilianPhoneVariants(waId);
-   let { data: contactForSave } = await supabase
-     .from('crm_contacts')
-      .select('id, total_messages_received, last_message_received_at')
-     .in('wa_id', variantsForSave)
-     .eq('user_id', userId)
+   let { data: contactForSave } = await scopeNumber(
+     supabase
+       .from('crm_contacts')
+       .select('id, total_messages_received, last_message_received_at')
+       .in('wa_id', variantsForSave)
+       .eq('user_id', userId)
+   )
      .order('last_message_received_at', { ascending: false, nullsFirst: true })
      .limit(1)
      .maybeSingle();
@@ -1381,9 +1399,10 @@ else if (message.type === "unsupported") {
         last_interaction: new Date().toISOString(),
         last_message_received_at: new Date().toISOString(),
         total_messages_received: 0,
-        metadata: { source: 'meta_webhook', profile: message?.profile || null }
+        metadata: { source: 'meta_webhook', profile: message?.profile || null },
+        ...numberPatch
       }, { 
-        onConflict: 'wa_id,user_id',
+        onConflict: inboundNumberId ? 'wa_id,user_id,whatsapp_number_id' : 'wa_id,user_id',
         ignoreDuplicates: false 
       })
       .select('id, total_messages_received')
@@ -1391,11 +1410,13 @@ else if (message.type === "unsupported") {
 
     if (createContactError) {
       // Fallback manual se o upsert falhar por qualquer motivo (ex: restrição complexa)
-      const { data: retryContact } = await supabase
-        .from('crm_contacts')
-        .select('id, total_messages_received, last_message_received_at')
-        .in('wa_id', variantsForSave)
-        .eq('user_id', userId)
+      const { data: retryContact } = await scopeNumber(
+        supabase
+          .from('crm_contacts')
+          .select('id, total_messages_received, last_message_received_at')
+          .in('wa_id', variantsForSave)
+          .eq('user_id', userId)
+      )
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1)
         .maybeSingle();
@@ -2859,6 +2880,57 @@ async function autoPushGoogleContactsForAllUsers(supabase: any) {
   }
 }
 
+/**
+ * Multi-WhatsApp: cada número do cadastro (crm_whatsapp_numbers) tem
+ * credenciais próprias e sua própria base de contatos/mensagens
+ * (coluna whatsapp_number_id). Estes helpers garantem que o envio sempre
+ * saia pelo número da conversa — enviar pelo número errado é o que gerava
+ * o erro "Re-engagement message" da Meta.
+ */
+async function getWhatsAppNumberById(supabase: any, numberId?: string | null) {
+  if (!numberId) return null;
+  const { data, error } = await supabase
+    .from('crm_whatsapp_numbers')
+    .select('*')
+    .eq('id', numberId)
+    .maybeSingle();
+  if (error) console.warn('[NUMBER] lookup by id failed', error.message);
+  return data || null;
+}
+
+async function getWhatsAppNumberByPhoneId(
+  supabase: any,
+  phoneNumberId?: string | null,
+  wabaId?: string | null,
+) {
+  if (!phoneNumberId && !wabaId) return null;
+  let query = supabase.from('crm_whatsapp_numbers').select('*').limit(1);
+  query = phoneNumberId
+    ? query.eq('meta_phone_number_id', phoneNumberId)
+    : query.eq('meta_waba_id', wabaId);
+  const { data, error } = await query;
+  if (error) console.warn('[NUMBER] lookup by phone failed', error.message);
+  const row = Array.isArray(data) ? data[0] : null;
+  return row || null;
+}
+
+/** Sobrepõe as credenciais de `crm_settings` com as do número informado. */
+function applyNumberToSettings(settings: any, numberRow: any) {
+  if (!numberRow?.meta_access_token || !numberRow?.meta_phone_number_id) return settings;
+  return {
+    ...(settings || {}),
+    meta_access_token: numberRow.meta_access_token,
+    meta_phone_number_id: numberRow.meta_phone_number_id,
+    meta_waba_id: numberRow.meta_waba_id ?? settings?.meta_waba_id ?? null,
+    meta_business_id: numberRow.meta_business_id ?? settings?.meta_business_id ?? null,
+    meta_app_id: numberRow.meta_app_id ?? settings?.meta_app_id ?? null,
+    meta_app_secret: numberRow.meta_app_secret ?? settings?.meta_app_secret ?? null,
+    meta_display_phone_number:
+      numberRow.meta_display_phone_number ?? settings?.meta_display_phone_number ?? null,
+    meta_verified_name: numberRow.meta_verified_name ?? settings?.meta_verified_name ?? null,
+  };
+}
+
 async function getCrmSettings(supabase: any, userId?: string | null) {
   if (userId) {
     const { data, error } = await supabase
@@ -4229,6 +4301,35 @@ async function fetchAndStoreIncomingMedia(
         settings = userSettings;
       }
       
+      // ---- Escopo por número de WhatsApp -------------------------------
+      // O app envia `whatsapp_number_id` (número aberto na tela). Em execuções
+      // internas (fluxos/agendamentos) herdamos o número do próprio contato.
+      let scopedNumberId: string | null = params.whatsapp_number_id || null;
+      if (!scopedNumberId && params.contactId) {
+        const { data: contactNumber } = await supabase
+          .from('crm_contacts')
+          .select('whatsapp_number_id')
+          .eq('id', params.contactId)
+          .maybeSingle();
+        if (contactNumber?.whatsapp_number_id) scopedNumberId = contactNumber.whatsapp_number_id;
+      }
+      if (scopedNumberId) {
+        const numberRow = await getWhatsAppNumberById(supabase, scopedNumberId);
+        if (numberRow && (!userId || numberRow.user_id === userId)) {
+          if (!userId) userId = numberRow.user_id;
+          if (!settings) settings = await getCrmSettings(supabase, userId);
+          settings = applyNumberToSettings(settings, numberRow);
+          console.log('[NUMBER] Credenciais aplicadas do número aberto', {
+            number_id: scopedNumberId,
+            phone_number_id: numberRow.meta_phone_number_id,
+          });
+        } else {
+          // Número inexistente ou de outro cadastro: nunca reaproveitamos.
+          console.warn('[NUMBER] whatsapp_number_id ignorado (não pertence ao usuário)', scopedNumberId);
+          scopedNumberId = null;
+        }
+      }
+
       // Se ainda não temos settings mas temos um contactId, tentamos buscar pelo user_id do contato
       if (!settings && trustedInternalRequest && params.contactId) {
         const { data: contactForId } = await supabase.from('crm_contacts').select('user_id').eq('id', params.contactId).maybeSingle();
@@ -4322,7 +4423,25 @@ async function fetchAndStoreIncomingMedia(
         const value = body?.entry?.[0]?.changes?.[0]?.value || {};
         const webhookPhoneNumberId = value?.metadata?.phone_number_id;
         const webhookWabaId = body?.entry?.[0]?.id;
-        if (webhookPhoneNumberId || webhookWabaId) {
+        // Primeiro tentamos o número exato que recebeu a mensagem: com dois
+        // números no mesmo cadastro, `crm_settings` guarda só um deles e a
+        // conversa do outro acabava sem dono (ou misturada).
+        const inboundNumber = await getWhatsAppNumberByPhoneId(
+          supabase,
+          webhookPhoneNumberId,
+          webhookWabaId,
+        );
+        if (inboundNumber?.user_id) {
+          userId = inboundNumber.user_id;
+          const baseSettings = await getCrmSettings(supabase, userId);
+          userSettings = applyNumberToSettings(baseSettings, inboundNumber) || baseSettings;
+          console.log('[WEBHOOK] Número de entrada resolvido', {
+            user_id: userId,
+            number_id: inboundNumber.id,
+            phone_number_id: inboundNumber.meta_phone_number_id,
+          });
+        }
+        if (!userSettings && (webhookPhoneNumberId || webhookWabaId)) {
           const settingsQuery = supabase
             .from('crm_settings')
             .select('*')

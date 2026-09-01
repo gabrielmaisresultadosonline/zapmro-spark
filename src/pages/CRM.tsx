@@ -143,6 +143,10 @@ import {
   syncSettingsIntoNumbers,
   type WhatsAppNumberRecord,
 } from "@/lib/whatsappNumbers";
+import {
+  getActiveWhatsAppNumberId,
+  setActiveWhatsAppNumberId,
+} from "@/lib/activeNumberContext";
 
 const getCanonicalConversationPhone = (rawPhone: unknown): string => {
   const digits = String(rawPhone ?? '').replace(/\D/g, '');
@@ -580,6 +584,27 @@ const CRM = () => {
   const [flows, setFlows] = useState<any[]>([]);
   const [contacts, setContacts] = useState<any[]>([]);
   const currentUserIdRef = useRef<string | null>(null);
+  // Multi-WhatsApp: número aberto agora. Cada número tem contatos, mensagens e
+  // histórico próprios (coluna whatsapp_number_id), então TODA consulta e todo
+  // insert de conversa é filtrado por ele.
+  const activeNumberIdRef = useRef<string | null>(getActiveWhatsAppNumberId());
+  /** Aplica o filtro do número aberto em qualquer query builder do Supabase. */
+  const scopeToNumber = <T,>(query: T): T => {
+    const numberId = activeNumberIdRef.current;
+    if (!numberId) return query;
+    return (query as any).eq('whatsapp_number_id', numberId) as T;
+  };
+  /** Campos de escopo para inserts de contatos/mensagens. */
+  const numberScopePatch = (): { whatsapp_number_id?: string } =>
+    activeNumberIdRef.current ? { whatsapp_number_id: activeNumberIdRef.current } : {};
+  /** Ignora eventos de realtime que pertencem a outro número do mesmo cadastro. */
+  const belongsToActiveNumber = (row: any): boolean => {
+    const numberId = activeNumberIdRef.current;
+    if (!numberId) return true;
+    const rowNumber = row?.whatsapp_number_id;
+    // Registros antigos (sem número) continuam visíveis até o backfill rodar.
+    return !rowNumber || rowNumber === numberId;
+  };
   // Per-contact inbound message timestamps (last 7 days) used to compute
   // unread counts shown as a yellow badge on the conversation list.
   const [inboundTimestampsByContact, setInboundTimestampsByContact] = useState<Record<string, string[]>>({});
@@ -1049,9 +1074,11 @@ const CRM = () => {
       const startOfWeek = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
-      const { data: monthMsgs } = await supabase
-        .from('crm_messages')
-        .select('contact_id, direction, created_at, metadata')
+      const { data: monthMsgs } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id, direction, created_at, metadata')
+      )
         .gte('created_at', startOfMonth)
         .order('created_at', { ascending: true });
 
@@ -1096,18 +1123,22 @@ const CRM = () => {
         }
       });
 
-      const { data: recent } = await supabase
-        .from('crm_messages')
-        .select('contact_id, direction, created_at')
+      const { data: recent } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id, direction, created_at')
+      )
         .eq('direction', 'inbound')
         .gte('created_at', since24h);
 
       const activeSet = new Set<string>();
       (recent || []).forEach((m: any) => m.contact_id && activeSet.add(m.contact_id));
 
-      const { data: recentWeek } = await supabase
-        .from('crm_messages')
-        .select('contact_id')
+      const { data: recentWeek } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id')
+      )
         .eq('direction', 'inbound')
         .gte('created_at', startOfWeek);
       const activeWeekSet = new Set<string>();
@@ -1189,9 +1220,11 @@ const CRM = () => {
       }
 
       if (type === 'paid' || type === 'weekly_paid') {
-        const { data: msgs } = await supabase
-          .from('crm_messages')
-          .select('contact_id, direction, created_at, metadata')
+        const { data: msgs } = await scopeToNumber(
+          supabase
+            .from('crm_messages')
+            .select('contact_id, direction, created_at, metadata')
+        )
           .gte('created_at', startTime)
           .order('created_at', { ascending: true });
 
@@ -1233,9 +1266,11 @@ const CRM = () => {
         setMetricsListData(contactDetails || []);
       } else {
         const filterTime = (type === 'active') ? new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString() : startTime;
-        const { data: recent } = await supabase
-          .from('crm_messages')
-          .select('contact_id')
+        const { data: recent } = await scopeToNumber(
+          supabase
+            .from('crm_messages')
+            .select('contact_id')
+        )
           .eq('direction', 'inbound')
           .gte('created_at', filterTime);
         
@@ -1300,10 +1335,12 @@ const CRM = () => {
     try {
       const cursor = realtimeFallbackCursorRef.current;
       const firstCursor = cursor || new Date(Date.now() - 15_000).toISOString();
-      const { data } = await supabase
-        .from('crm_messages')
-        .select('*')
-        .eq('user_id', currentUserIdRef.current ?? '')
+      const { data } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('*')
+          .eq('user_id', currentUserIdRef.current ?? '')
+      )
         .gt('created_at', firstCursor)
         .order('created_at', { ascending: true })
         .limit(100); // Limite de segurança para evitar sobrecarga no realtime fallback
@@ -1579,7 +1616,7 @@ const CRM = () => {
           setSelectedContact(null);
           setChatMessages([]);
           messagesCacheRef.current = {};
-          contactsCacheKeyRef.current = `crm_contacts_cache_v3_${nextUserId}`;
+          contactsCacheKeyRef.current = `crm_contacts_cache_v3_${nextUserId}_${activeNumberIdRef.current || 'default'}`;
           contactsSeededRef.current = false;
           lastContactsSyncRef.current = null;
         }
@@ -1611,6 +1648,8 @@ const CRM = () => {
         if (payload.eventType === 'INSERT') {
           const newMessage: any = payload.new;
           if (!currentUserIdRef.current || newMessage.user_id !== currentUserIdRef.current) return;
+          // Cada número tem sua própria caixa: eventos de outro número não entram aqui.
+          if (!belongsToActiveNumber(newMessage)) return;
           // Disparos em massa/templates podem criar contatos novos (lista fria)
           // que ainda não estão carregados na lista: busca e insere na hora.
           setContacts(prev => {
@@ -1672,6 +1711,7 @@ const CRM = () => {
         } else if (payload.eventType === 'UPDATE') {
           const updatedMessage = payload.new;
           if (!currentUserIdRef.current || updatedMessage.user_id !== currentUserIdRef.current) return;
+          if (!belongsToActiveNumber(updatedMessage)) return;
           if (selectedContactRef.current && updatedMessage.contact_id === selectedContactRef.current.id) {
             setChatMessages(prev => prev.map(m => m.id === updatedMessage.id ? updatedMessage : m));
             if (updatedMessage.direction === 'outbound' && updatedMessage.status === 'failed') {
@@ -1689,6 +1729,7 @@ const CRM = () => {
         const oldRow: any = (payload as any).old;
         const eventOwnerId = newRow?.user_id ?? oldRow?.user_id;
         if (!currentUserIdRef.current || eventOwnerId !== currentUserIdRef.current) return;
+        if (!belongsToActiveNumber(newRow ?? oldRow)) return;
         if (payload.eventType === 'DELETE' && oldRow?.id) {
           setContacts(prev => prev.filter(c => c.id !== oldRow.id));
         } else if (newRow?.id) {
@@ -1870,7 +1911,7 @@ const CRM = () => {
       }
       currentUserIdRef.current = userId;
       // Resolve cache key once per user
-      contactsCacheKeyRef.current = `crm_contacts_cache_v3_${userId}`;
+      contactsCacheKeyRef.current = `crm_contacts_cache_v3_${userId}_${activeNumberIdRef.current || 'default'}`;
       const cacheKey = contactsCacheKeyRef.current;
       const now = Date.now();
 
@@ -1907,10 +1948,12 @@ const CRM = () => {
       let pageError = false;
 
       for (let page = 0; page < MAX_PAGES; page++) {
-        let q = supabase
-          .from('crm_contacts')
-          .select('*')
-          .eq('user_id', userId)
+        let q = scopeToNumber(
+          supabase
+            .from('crm_contacts')
+            .select('*')
+            .eq('user_id', userId)
+        )
           .order('updated_at', { ascending: false })
           .range(from, from + pageSize - 1);
 
@@ -2004,10 +2047,12 @@ const CRM = () => {
   const fetchInboundTimestamps = async () => {
     try {
       const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-      const { data } = await supabase
-        .from('crm_messages')
-        .select('contact_id, created_at')
-        .eq('user_id', currentUserIdRef.current ?? '')
+      const { data } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('contact_id, created_at')
+          .eq('user_id', currentUserIdRef.current ?? '')
+      )
         .eq('direction', 'inbound')
         .gte('created_at', since)
         .order('created_at', { ascending: false });
@@ -2281,6 +2326,8 @@ const CRM = () => {
          setUserNumbersCount(numbers.length);
          const stored = getActiveNumberId(user.id);
          const validStored = stored && numbers.some((n) => n.id === stored) ? stored : null;
+         activeNumberIdRef.current = validStored;
+         setActiveWhatsAppNumberId(validStored);
          setActiveNumberId(validStored);
        } catch (multiError) {
          console.warn('[CRM] multi-whatsapp indisponível:', multiError);
@@ -3119,19 +3166,21 @@ const CRM = () => {
         
         const { data: { user: bulkUser } } = await supabase.auth.getUser();
         for (const num of contactsToProcess) {
-          let { data: contact } = await supabase
-            .from('crm_contacts')
-            .select('id')
-            .eq('wa_id', num)
-            .eq('user_id', bulkUser?.id ?? '')
-            .maybeSingle();
+          let { data: contact } = await scopeToNumber(
+            supabase
+              .from('crm_contacts')
+              .select('id')
+              .eq('wa_id', num)
+              .eq('user_id', bulkUser?.id ?? '')
+          ).maybeSingle();
           if (!contact) {
             const { data: newContact, error: createError } = await supabase.from('crm_contacts').insert({
               wa_id: num,
               name: num,
               user_id: bulkUser?.id,
               status: 'new',
-              source_type: 'bulk_import'
+              source_type: 'bulk_import',
+              ...numberScopePatch(),
             }).select().single();
             if (!createError && newContact) contact = newContact;
           }
@@ -3248,12 +3297,13 @@ const CRM = () => {
     try {
       // 1. Garantir que o contato existe ou criar um temporário/persistente
       const { data: { user: bdayUser } } = await supabase.auth.getUser();
-      let { data: contact } = await supabase
-        .from('crm_contacts')
-        .select('id')
-        .eq('wa_id', birthdayNumber)
-        .eq('user_id', bdayUser?.id ?? '')
-        .maybeSingle();
+      let { data: contact } = await scopeToNumber(
+        supabase
+          .from('crm_contacts')
+          .select('id')
+          .eq('wa_id', birthdayNumber)
+          .eq('user_id', bdayUser?.id ?? '')
+      ).maybeSingle();
       
       if (!contact) {
         const { data: newContact, error: createError } = await supabase.from('crm_contacts').insert({
@@ -3261,7 +3311,8 @@ const CRM = () => {
           name: birthdayName,
           user_id: bdayUser?.id,
           status: 'new',
-          source_type: 'system'
+          source_type: 'system',
+          ...numberScopePatch(),
         }).select().single();
         if (createError) throw createError;
         contact = newContact;
@@ -4522,10 +4573,13 @@ const CRM = () => {
           status: contact.status || 'new',
           source_type: 'imported',
           metadata: contact.metadata || {},
-          last_interaction: null
+          last_interaction: null,
+          ...numberScopePatch(),
         }));
 
-        const { error } = await supabase.from('crm_contacts').upsert(batch, { onConflict: 'wa_id,user_id' });
+        const { error } = await supabase.from('crm_contacts').upsert(batch, {
+          onConflict: activeNumberIdRef.current ? 'wa_id,user_id,whatsapp_number_id' : 'wa_id,user_id',
+        });
         if (!error) {
           successCount += batch.length;
           // Atualiza a lista periodicamente para feedback visual
@@ -4871,6 +4925,15 @@ const CRM = () => {
   const handleSwitchNumber = () => {
     if (!currentUserId) return;
     persistActiveNumberId(currentUserId, null);
+    activeNumberIdRef.current = null;
+    setActiveWhatsAppNumberId(null);
+    // Nada da caixa anterior pode sobrar na tela ou no cache.
+    setContacts([]);
+    setSelectedContact(null);
+    setChatMessages([]);
+    messagesCacheRef.current = {};
+    contactsSeededRef.current = false;
+    lastContactsSyncRef.current = null;
     setActiveNumberId(null);
   };
   if (!loading && multiNumberEnabled && currentUserId && !activeNumberId) {
@@ -4879,6 +4942,15 @@ const CRM = () => {
         userId={currentUserId}
         maxNumbers={maxWhatsAppNumbers}
         onSelected={(record: WhatsAppNumberRecord) => {
+          // Fixa o escopo ANTES de qualquer consulta para não misturar caixas.
+          activeNumberIdRef.current = record.id;
+          setActiveWhatsAppNumberId(record.id);
+          setContacts([]);
+          setSelectedContact(null);
+          setChatMessages([]);
+          messagesCacheRef.current = {};
+          contactsSeededRef.current = false;
+          lastContactsSyncRef.current = null;
           setActiveNumberId(record.id);
           void fetchData(true);
         }}
@@ -9853,7 +9925,8 @@ const CRM = () => {
                     wa_id: contactToView.wa_id,
                     metadata: contactToView.metadata,
                     status: 'new',
-                    source_type: 'system'
+                    source_type: 'system',
+                    ...numberScopePatch(),
                   }]);
                   if (error) {
                     toast({ title: "Erro ao criar contato", variant: "destructive" });

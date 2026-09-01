@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { getActiveWhatsAppNumberId, activeNumberPatch } from "@/lib/activeNumberContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -426,10 +427,18 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
     }
   };
 
+  /** Filtra pelo número de WhatsApp aberto: cada caixa tem sua própria base. */
+  const scopeNumber = <T,>(query: T): T => {
+    const numberId = getActiveWhatsAppNumberId();
+    return numberId ? ((query as any).eq('whatsapp_number_id', numberId) as T) : query;
+  };
+
   const fetchCountdownHistory = async () => {
-    const { data } = await supabase
-      .from('crm_contacts')
-      .select('wa_id, name, status, countdown_trigger_sent_at, countdown_trigger_last_sent_at, countdown_trigger_total_sent')
+    const { data } = await scopeNumber(
+      supabase
+        .from('crm_contacts')
+        .select('wa_id, name, status, countdown_trigger_sent_at, countdown_trigger_last_sent_at, countdown_trigger_total_sent')
+    )
       .not('countdown_trigger_last_sent_at', 'is', null)
       .order('countdown_trigger_last_sent_at', { ascending: false })
       .limit(100);
@@ -629,16 +638,18 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
         } else if (type === 'flow') {
           // Find contact or create one (flows require a contactId)
           const canonicalNumber = canonicalWaId(number);
-          let { data: contact } = await supabase
-            .from('crm_contacts')
-            .select('id')
-            .in('wa_id', waIdVariants(number))
+          let { data: contact } = await scopeNumber(
+            supabase
+              .from('crm_contacts')
+              .select('id')
+              .in('wa_id', waIdVariants(number))
+          )
             .limit(1)
             .maybeSingle();
           if (!contact) {
             const { data: created } = await supabase
               .from('crm_contacts')
-              .insert([{ wa_id: canonicalNumber, name: canonicalNumber, source_type: 'broadcast' }])
+              .insert([{ wa_id: canonicalNumber, name: canonicalNumber, source_type: 'broadcast', ...activeNumberPatch() }])
               .select('id')
               .single();
             contact = created;
@@ -680,10 +691,11 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
     // Damos um tempo para os status chegarem e reportamos o resultado verdadeiro.
     try {
       await new Promise(resolve => setTimeout(resolve, 15000));
-      const { data: sentMessages } = await supabase
-        .from('crm_messages')
-        .select('status')
-        .contains('metadata', { broadcast_id: broadcastId });
+      const { data: sentMessages } = await scopeNumber(
+        supabase
+          .from('crm_messages')
+          .select('status')
+      ).contains('metadata', { broadcast_id: broadcastId });
 
       if (sentMessages && sentMessages.length > 0) {
         const confirmed = sentMessages.filter(m => ['sent', 'delivered', 'read'].includes(String(m.status))).length;
@@ -704,10 +716,12 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
       try {
         for (const number of numbers) {
           const canonicalNumber = canonicalWaId(number);
-          const { data: existing } = await supabase
-            .from('crm_contacts')
-            .select('id')
-            .in('wa_id', waIdVariants(number))
+          const { data: existing } = await scopeNumber(
+            supabase
+              .from('crm_contacts')
+              .select('id')
+              .in('wa_id', waIdVariants(number))
+          )
             .limit(1)
             .maybeSingle();
 
@@ -719,7 +733,7 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
           } else {
             await supabase
               .from('crm_contacts')
-              .insert([{ wa_id: canonicalNumber, name: canonicalNumber, status: applyTag, source_type: 'broadcast' }]);
+              .insert([{ wa_id: canonicalNumber, name: canonicalNumber, status: applyTag, source_type: 'broadcast', ...activeNumberPatch() }]);
           }
         }
         toast({ title: `Etiqueta aplicada a ${numbers.length} contatos!` });
