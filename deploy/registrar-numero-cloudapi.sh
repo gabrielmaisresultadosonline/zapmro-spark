@@ -38,6 +38,7 @@ PIN="${2:-}"
 MODO="${3:-}"
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$RAIZ/deploy/postgres-stack/.env"
+SECRETS_FILE="$RAIZ/deploy/postgres-stack/secrets.env"
 API="https://graph.facebook.com/v21.0"
 
 c_ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -53,7 +54,14 @@ command -v psql >/dev/null || { c_err "psql ausente: sudo apt-get install -y pos
 command -v jq   >/dev/null || { c_err "jq ausente: sudo apt-get install -y jq"; exit 1; }
 
 # shellcheck disable=SC1090
-set -a; . "$ENV_FILE"; set +a
+set -a
+. "$ENV_FILE"
+# as chaves das integracoes (Meta, Google, SMTP...) moram no secrets.env,
+# lido normalmente so pelo container "functions" — aqui tambem precisamos delas.
+[ -f "$SECRETS_FILE" ] && . "$SECRETS_FILE"
+set +a
+# fallback: se PUBLIC_API_URL nao existir, deriva do site publico
+: "${PUBLIC_API_URL:=${PUBLIC_FUNCTIONS_URL:-${APP_BASE_URL:-${SITE_URL:-}}}}"
 DB="postgresql://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PG_PORT:-5432}/${POSTGRES_DB:-postgres}"
 q1() { psql "$DB" -X -tA -P pager=off -c "$1" 2>/dev/null; }
 

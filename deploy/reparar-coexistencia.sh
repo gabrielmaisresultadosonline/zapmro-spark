@@ -35,6 +35,7 @@ export PAGER=cat PSQL_PAGER=cat LESS=FRX
 ALVO="${1:-}"
 RAIZ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="$RAIZ/deploy/postgres-stack/.env"
+SECRETS_FILE="$RAIZ/deploy/postgres-stack/secrets.env"
 API="https://graph.facebook.com/v21.0"
 
 c_ok()   { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -48,7 +49,14 @@ command -v psql >/dev/null || { c_err "psql ausente: sudo apt-get install -y pos
 command -v jq   >/dev/null || { c_err "jq ausente: sudo apt-get install -y jq"; exit 1; }
 
 # shellcheck disable=SC1090
-set -a; . "$ENV_FILE"; set +a
+set -a
+. "$ENV_FILE"
+# as chaves das integracoes (Meta, Google, SMTP...) moram no secrets.env,
+# lido normalmente so pelo container "functions" — aqui tambem precisamos delas.
+[ -f "$SECRETS_FILE" ] && . "$SECRETS_FILE"
+set +a
+# fallback: se PUBLIC_API_URL nao existir, deriva do site publico
+: "${PUBLIC_API_URL:=${PUBLIC_FUNCTIONS_URL:-${APP_BASE_URL:-${SITE_URL:-}}}}"
 DB="postgresql://postgres:${POSTGRES_PASSWORD}@127.0.0.1:${PG_PORT:-5432}/${POSTGRES_DB:-postgres}"
 q1() { psql "$DB" -v ON_ERROR_STOP=0 -X -tA -P pager=off -c "$1" 2>/dev/null; }
 [ -n "$(q1 'select 1')" ] || { c_err "Sem conexão com o banco (container zapmro-db de pé?)"; exit 1; }
@@ -80,7 +88,7 @@ LINHAS="$(psql "$DB" -X -tA -F'|' -P pager=off -c "
 
 titulo "1) Campos assinados hoje no app Meta"
 if [ -z "$APP_ID" ] || [ -z "$APP_SECRET" ]; then
-  c_err "  FACEBOOK_APP_ID / FACEBOOK_APP_SECRET ausentes no .env — não é possível reassinar os campos do app."
+  c_err "  FACEBOOK_APP_ID / FACEBOOK_APP_SECRET ausentes — preencha em deploy/postgres-stack/secrets.env e rode de novo."
 else
   curl -s -m 25 "$API/${APP_ID}/subscriptions?access_token=${APP_ID}|${APP_SECRET}" \
     | jq -r '.data[]? | "objeto=\(.object) campos=\([.fields[]?.name] | join(","))\ncallback=\(.callback_url // "-")"' \
@@ -89,7 +97,7 @@ fi
 
 titulo "2) Reassinando o app com os campos de coexistência"
 if [ -z "$APP_ID" ] || [ -z "$APP_SECRET" ] || [ -z "$BASE_URL" ]; then
-  c_err "  faltam FACEBOOK_APP_ID / FACEBOOK_APP_SECRET / PUBLIC_API_URL no .env — pulando."
+  c_err "  faltam FACEBOOK_APP_ID / FACEBOOK_APP_SECRET (secrets.env) ou PUBLIC_API_URL/SITE_URL (.env) — pulando."
 else
   CALLBACK="${BASE_URL%/}/functions/v1/meta-whatsapp-crm"
   echo "  callback: $CALLBACK"
