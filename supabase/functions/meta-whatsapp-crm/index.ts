@@ -1157,12 +1157,35 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
     return jsonResponse({ success: true, ignored: 'missing_user' });
   }
 
-  const inboundNumberId: string | null =
+  // Caixa efetiva do evento. Quando o phone_number_id do payload não casa com
+  // nenhuma linha de crm_whatsapp_numbers (cadastro antigo, número recém trocado
+  // na Meta), caímos no número padrão do usuário — é exatamente o que o trigger
+  // do banco faria, e assim o app e o banco nunca divergem no ON CONFLICT.
+  let inboundNumberId: string | null =
     inboundNumberRow?.user_id === userId ? inboundNumberRow.id : null;
+  if (!inboundNumberId) {
+    const { data: fallbackNumbers } = await supabase
+      .from('crm_whatsapp_numbers')
+      .select('id, is_primary, created_at')
+      .eq('user_id', userId)
+      .order('is_primary', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: true })
+      .limit(1);
+    const fallbackNumber = Array.isArray(fallbackNumbers) ? fallbackNumbers[0] : null;
+    if (fallbackNumber?.id) {
+      inboundNumberId = fallbackNumber.id;
+      console.warn('[WEBHOOK] phone_number_id não encontrado; usando número padrão do cadastro', {
+        phone_number_id: webhookPhoneNumberId,
+        waba_id: webhookWabaId,
+        whatsapp_number_id: inboundNumberId,
+      });
+    }
+  }
   /** Restringe a consulta ao número da caixa quando ele é conhecido. */
   const scopeNumber = <T,>(query: T): T =>
     inboundNumberId ? ((query as any).eq('whatsapp_number_id', inboundNumberId) as T) : query;
   const numberPatch = inboundNumberId ? { whatsapp_number_id: inboundNumberId } : {};
+
 
   if (Array.isArray(value.statuses) && value.statuses.length > 0) {
     const results = [];
