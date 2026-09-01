@@ -71,6 +71,94 @@ const ERROR_DICTIONARY: Record<string, ErrorExplanation> = {
     fix: "Envie um template de Utilidade ou aguarde o contato iniciar a conversa.",
     icon: <ShieldAlert className="w-4 h-4 text-orange-400" />,
   },
+
+  // ---- Códigos internos normalizados pelo backend (normalizeMetaSendError) ----
+  META_BILLING_ERROR: {
+    title: "Pagamento recusado pela Meta (financeiro real)",
+    reason:
+      "A Meta retornou erro de cobrança nesta WABA. Mesmo com cartão cadastrado isso acontece quando: o cartão está vinculado a OUTRA conta/portfólio, o limite de gastos da WABA foi atingido, a linha de crédito está suspensa, ou o método de pagamento existe no Business Manager mas não está vinculado a esta conta do WhatsApp.",
+    fix:
+      "Gerenciador de Negócios → Central de Pagamentos: confirme que o cartão está ATIVO, sem recusa, e clique na WABA usada no disparo para checar se ela aponta para esse método. Depois confira o limite de gastos (Spend limit) do WhatsApp e aumente-o. Só então reenvie.",
+    icon: <CreditCard className="w-4 h-4 text-red-400" />,
+  },
+  META_PERMISSION_DENIED: {
+    title: "Falta permissão no app da Meta — NÃO é saldo",
+    reason:
+      "A Meta respondeu com erro de permissão (código 10/200). O token usado não possui o escopo whatsapp_business_messaging, ou o número/WABA não está no portfólio deste app, ou o template pertence a outra WABA.",
+    fix:
+      "Vá em Configurações → Conectar com Facebook e refaça a conexão marcando TODAS as permissões solicitadas. Confirme que o número escolhido é o mesmo do disparo.",
+    icon: <ShieldAlert className="w-4 h-4 text-orange-400" />,
+  },
+  META_OBJECT_NOT_FOUND: {
+    title: "Número/template não encontrado para este token",
+    reason:
+      "A Meta não localizou o Phone Number ID, o template ou a WABA com o token atual. Costuma ocorrer após trocar de número ou de conta comercial sem reconectar.",
+    fix: "Reconecte o WhatsApp e verifique se o template está aprovado na MESMA WABA do número usado.",
+    icon: <AlertTriangle className="w-4 h-4 text-yellow-400" />,
+  },
+  META_TOKEN_INVALID: {
+    title: "Conexão com a Meta expirou",
+    reason: "O token de acesso expirou ou o app perdeu acesso ao número.",
+    fix: "Configurações → Conectar com Facebook e refaça a conexão do número.",
+    icon: <ShieldAlert className="w-4 h-4 text-orange-400" />,
+  },
+  META_ACCOUNT_RESTRICTED: {
+    title: "WABA restrita pela Meta",
+    reason: "A conta comercial está com restrição de envio aplicada pela Meta.",
+    fix: "Abra o Gerenciador de Negócios, veja a seção de restrições/qualidade e solicite revisão.",
+    icon: <ShieldAlert className="w-4 h-4 text-red-400" />,
+  },
+  META_NUMBER_NOT_REGISTERED: {
+    title: "Número sem registro na Cloud API",
+    reason: "O registro do número na Cloud API não foi concluído.",
+    fix: "Reconecte o WhatsApp para refazer o registro do número.",
+    icon: <ShieldAlert className="w-4 h-4 text-orange-400" />,
+  },
+  META_24H_WINDOW: {
+    title: "Janela de 24h expirada",
+    reason: "O contato não responde há mais de 24h, então mensagens livres são bloqueadas.",
+    fix: "Envie um template aprovado para reabrir a conversa.",
+    icon: <Clock className="w-4 h-4 text-yellow-400" />,
+  },
+  META_QUALITY_LIMIT: {
+    title: "Bloqueio de qualidade / engajamento",
+    reason: "A Meta limitou a entrega para proteger a experiência do usuário.",
+    fix: "Reduza o volume, aumente o intervalo entre envios e melhore o template.",
+    icon: <ShieldAlert className="w-4 h-4 text-orange-400" />,
+  },
+  META_UNDELIVERABLE: {
+    title: "Mensagem não entregue (Undeliverable)",
+    reason: "O destinatário provavelmente não tem WhatsApp ativo ou não recebe mensagens de empresas.",
+    fix: "Valide o número (DDD + 9º dígito). Falhando 2x, remova da lista.",
+    icon: <PhoneOff className="w-4 h-4 text-red-400" />,
+  },
+  META_TEMPLATE_ERROR: {
+    title: "Problema no template",
+    reason: "Nome/idioma inexistente, template pausado/reprovado, ou variáveis em quantidade diferente da aprovada.",
+    fix: "Confira o template no Gerenciador do WhatsApp e ajuste as variáveis antes de reenviar.",
+    icon: <AlertTriangle className="w-4 h-4 text-yellow-400" />,
+  },
+  META_RATE_LIMIT: {
+    title: "Limite de envio atingido",
+    reason: "Muitas mensagens em pouco tempo (rate limit da Cloud API).",
+    fix: "Aumente o intervalo randômico entre envios e retome depois.",
+    icon: <Clock className="w-4 h-4 text-yellow-400" />,
+  },
+  META_GENERIC_PARAM_ERROR: {
+    title: "Parâmetros rejeitados pela Meta",
+    reason: "O payload da mensagem foi recusado (código 135000).",
+    fix: "Revise variáveis, mídia e formato do template.",
+    icon: <AlertTriangle className="w-4 h-4 text-yellow-400" />,
+  },
+  META_PAYMENT_OR_PERMISSION_ERROR: {
+    title: "Erro antigo: pagamento OU permissão (classificação imprecisa)",
+    reason:
+      "Registro gerado por uma versão anterior que agrupava saldo e permissão no mesmo código. Na prática, códigos 10 e 100 são quase sempre PERMISSÃO do app, não falta de saldo.",
+    fix:
+      "Refaça a conexão pelo Facebook concedendo todas as permissões. Novos disparos já mostram o motivo exato (financeiro x permissão) com código e fbtrace_id.",
+    icon: <ShieldAlert className="w-4 h-4 text-orange-400" />,
+  },
+
 };
 
 const UNKNOWN_ERROR: ErrorExplanation = {
