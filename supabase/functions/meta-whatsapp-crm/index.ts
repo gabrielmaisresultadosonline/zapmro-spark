@@ -2598,6 +2598,56 @@ function isGoogleInsufficientScopeError(errorBody: string) {
   return /insufficient authentication scopes|ACCESS_TOKEN_SCOPE_INSUFFICIENT|PERMISSION_DENIED/i.test(errorBody);
 }
 
+const GOOGLE_CONTACTS_WRITE_SCOPE = 'https://www.googleapis.com/auth/contacts';
+
+/**
+ * Consulta os escopos realmente concedidos ao access token.
+ * Retorna null quando não foi possível verificar (não bloqueia o fluxo).
+ */
+async function checkGoogleTokenScopes(accessToken: string): Promise<string[] | null> {
+  try {
+    const resp = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?access_token=${encodeURIComponent(accessToken)}`,
+    );
+    if (!resp.ok) return null;
+    const body = await resp.json().catch(() => ({} as any));
+    const scope = typeof body?.scope === 'string' ? body.scope : '';
+    return scope ? scope.split(/\s+/).filter(Boolean) : [];
+  } catch (_e) {
+    return null;
+  }
+}
+
+function hasGoogleContactsWriteScope(scopes: string[] | null): boolean | null {
+  if (scopes === null) return null;
+  return scopes.includes(GOOGLE_CONTACTS_WRITE_SCOPE);
+}
+
+/**
+ * Circuit breaker: marca a conta como "precisa reconectar" e desliga o
+ * auto_sync SÓ dela, para o cron parar de tentar em loop (403 infinito).
+ */
+async function markGoogleAccountReconnectRequired(
+  supabase: any,
+  accountId: string,
+  errorCode: string,
+  errorMessage: string,
+) {
+  try {
+    await supabase.from('crm_google_accounts').update({
+      connection_status: 'reconnect_required',
+      auto_sync: false,
+      last_sync_error_code: errorCode,
+      last_sync_error: String(errorMessage || '').slice(0, 500),
+      last_sync_error_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq('id', accountId);
+  } catch (e) {
+    console.warn('[GOOGLE-SYNC] Não foi possível marcar reconexão necessária:', (e as any)?.message);
+  }
+}
+
+
 function normalizeMetaSendError(result: any, fallback = 'Erro ao enviar mensagem pela Meta') {
   const metaError = result?.error || {};
   const rawMessage = String(metaError?.error_user_msg || metaError?.message || fallback);
@@ -2791,11 +2841,23 @@ async function pushPendingContactsToGoogle(supabase: any, userId: string, settin
           console.error(`[GOOGLE-SYNC] Falha ao renovar token da conta ${account.email}:`, JSON.stringify(refreshTokens));
           lastError = `Token expirado (${account.email}). Reconecte esta conta.`;
           reconnectAccounts.push(account.email);
+          await markGoogleAccountReconnectRequired(
+            supabase,
+            account.id,
+            'REFRESH_FAILED',
+            `Falha ao renovar token: ${refreshTokens?.error_description || refreshTokens?.error || 'erro desconhecido'}`,
+          );
           continue;
         }
       } else {
         lastError = `Sem refresh token (${account.email}). Reconecte esta conta.`;
         reconnectAccounts.push(account.email);
+        await markGoogleAccountReconnectRequired(
+          supabase,
+          account.id,
+          'NO_REFRESH_TOKEN',
+          'Conta sem refresh token. É necessário reconectar concedendo acesso aos Contatos.',
+        );
         continue;
       }
     }
@@ -2809,10 +2871,34 @@ async function pushPendingContactsToGoogle(supabase: any, userId: string, settin
     } catch (error: any) {
       lastError = error?.message || String(error);
       console.error(`[GOOGLE-SYNC] Não foi possível deduplicar a conta ${account.email}:`, lastError);
+      // 403 por escopo insuficiente é permanente: o refresh_token salvo não
+      // tem permissão de escrita em Contatos. Sem circuit breaker, o cron
+      // repetiria esse erro a cada minuto para sempre.
+      if (isGoogleInsufficientScopeError(lastError)) {
+        reconnectAccounts.push(account.email);
+        await markGoogleAccountReconnectRequired(
+          supabase,
+          account.id,
+          'INSUFFICIENT_SCOPE',
+          `Permissão de Contatos ausente (${account.email}). Reconecte a conta autorizando o acesso aos Contatos.`,
+        );
+      }
       // Segurança: se não foi possível conferir o Google, não crie nada. É
       // preferível manter pendente a duplicar milhares de contatos.
       continue;
     }
+
+    // A conta respondeu bem: limpe qualquer marcação antiga de erro.
+    if (account.connection_status && account.connection_status !== 'active') {
+      await supabase.from('crm_google_accounts').update({
+        connection_status: 'active',
+        last_sync_error_code: null,
+        last_sync_error: null,
+        last_sync_error_at: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', account.id);
+    }
+
 
     const alreadyOnGoogle = forThisAccount.filter((contact: any) =>
       googleContactsByPhone.has(canonicalBrazilianWaId(contact.wa_id))
@@ -3038,6 +3124,9 @@ async function autoPushGoogleContactsForAllUsers(supabase: any) {
       .from('crm_google_accounts')
       .select('*')
       .eq('auto_sync', true)
+      // Contas marcadas para reconexão ficam de fora até o usuário reconectar.
+      .or('connection_status.is.null,connection_status.eq.active')
+
       .order('updated_at', { ascending: false });
     if (!accounts || accounts.length === 0) return;
 
@@ -5978,6 +6067,13 @@ async function fetchAndStoreIncomingMedia(
          .eq('email', email)
          .maybeSingle();
 
+       // Valide os escopos REALMENTE concedidos. Sem isso, uma conta sem
+       // permissão de Contatos é salva como "conectada" e depois falha com
+       // 403 a cada minuto no cron.
+       const grantedScopes = await checkGoogleTokenScopes(tokens.access_token);
+       const hasContactsWrite = hasGoogleContactsWriteScope(grantedScopes);
+       const scopeOk = hasContactsWrite !== false; // null = não verificável
+
        // Store in crm_google_accounts. Google may omit refresh_token on repeated consent,
        // so preserve the previous one instead of overwriting it with null/undefined.
        const { data: account, error: accError } = await supabase
@@ -5989,16 +6085,38 @@ async function fetchAndStoreIncomingMedia(
            expiry_date: Date.now() + (tokens.expires_in * 1000),
            updated_at: new Date().toISOString(),
            user_id: userId,
-           auto_sync: existingAccount?.auto_sync ?? true,
+           auto_sync: scopeOk ? (existingAccount?.auto_sync ?? true) : false,
+           connection_status: scopeOk ? 'active' : 'reconnect_required',
+           granted_scopes: grantedScopes ? grantedScopes.join(' ') : null,
+           last_sync_error_code: scopeOk ? null : 'INSUFFICIENT_SCOPE',
+           last_sync_error: scopeOk
+             ? null
+             : 'A permissão de Contatos do Google não foi concedida. Reconecte e marque a caixa de acesso aos Contatos.',
+           last_sync_error_at: scopeOk ? null : new Date().toISOString(),
          }, { onConflict: 'user_id, email' })
          .select()
          .single();
 
       if (accError) throw accError;
 
+      if (!scopeOk) {
+        console.error(`[OAUTH] Conta ${email} conectada SEM escopo de Contatos. Escopos: ${grantedScopes?.join(' ')}`);
+        return new Response(JSON.stringify({
+          success: false,
+          requiresReconnect: true,
+          account,
+          error: 'A permissão de Contatos do Google não foi concedida. Reconecte a conta e autorize o acesso aos Contatos.',
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
       return new Response(JSON.stringify({ success: true, account }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
+
+
     }
 
     if (action === 'syncGoogleContacts') {

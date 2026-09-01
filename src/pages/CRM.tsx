@@ -743,7 +743,7 @@ const CRM = () => {
   const [webhooks, setWebhooks] = useState<any[]>([]);
   const [isNewWebhookDialogOpen, setIsNewWebhookDialogOpen] = useState(false);
   const [newWebhook, setNewWebhook] = useState({ name: '', response_type: 'text' as 'text' | 'template', template_id: '', secret_token: '', is_active: true, default_status: 'new' });
-  const [googleAccounts, setGoogleAccounts] = useState<Array<{ id: string; email: string; auto_sync: boolean }>>([]);
+  const [googleAccounts, setGoogleAccounts] = useState<Array<{ id: string; email: string; auto_sync: boolean; connection_status?: string | null; last_sync_error?: string | null }>>([]);
   const googleContactsEnabled = googleAccounts.length > 0;
   const anyAutoSync = googleAccounts.some(a => a.auto_sync);
   const MAX_GOOGLE_ACCOUNTS = 3;
@@ -2372,7 +2372,7 @@ const CRM = () => {
       // Busca todas as contas Google conectadas (até 3)
       const { data: googleAccs } = await supabase
         .from('crm_google_accounts')
-        .select('id, email, auto_sync')
+        .select('id, email, auto_sync, connection_status, last_sync_error')
         .eq('user_id', user.id)
         .order('created_at', { ascending: true });
       if (googleAccs) {
@@ -8341,10 +8341,21 @@ const CRM = () => {
                                 <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center flex-shrink-0">
                                   <LucideIcons.Mail className="w-3.5 h-3.5 text-primary" />
                                 </div>
-                                <span className="text-xs font-medium truncate" title={acc.email}>
-                                  {acc.email}
-                                </span>
+                                <div className="min-w-0 flex-1">
+                                  <span className="text-xs font-medium truncate block" title={acc.email}>
+                                    {acc.email}
+                                  </span>
+                                  {acc.connection_status && acc.connection_status !== 'active' && (
+                                    <span
+                                      className="text-[10px] font-bold text-destructive truncate block"
+                                      title={acc.last_sync_error || 'Reconecte esta conta autorizando o acesso aos Contatos.'}
+                                    >
+                                      ⚠ Reconexão necessária
+                                    </span>
+                                  )}
+                                </div>
                               </div>
+
                               <div className="flex items-center gap-2 flex-shrink-0">
                                 <Button
                                   variant="outline"
