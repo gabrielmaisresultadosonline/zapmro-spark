@@ -98,7 +98,7 @@ FILTRO_SQL="true"
 
 q "
 select
-  p.email                                                as cadastro,
+  ${EMAIL_EXPR}                                                as cadastro,
   coalesce(n.label,'(sem nome)')                         as numero,
   coalesce(n.meta_display_phone_number,'-')              as telefone,
   coalesce(n.meta_phone_number_id,'!! VAZIO')            as phone_number_id,
@@ -110,14 +110,14 @@ select
 from public.crm_whatsapp_numbers n
 join auth.users p on p.id = n.user_id
 where $FILTRO_SQL
-order by p.email, n.created_at;
+order by ${EMAIL_EXPR}, n.created_at;
 "
 
 # ---------------------------------------------------------------------------
 titulo "3) Volume por número (quem está zerado)"
 q "
 select
-  p.email                                       as cadastro,
+  ${EMAIL_EXPR}                                       as cadastro,
   coalesce(n.label, n.meta_display_phone_number,'(sem nome)') as numero,
   (select count(*) from public.crm_contacts c
      where c.whatsapp_number_id = n.id)         as contatos,
@@ -132,13 +132,13 @@ select
 from public.crm_whatsapp_numbers n
 join auth.users p on p.id = n.user_id
 where $FILTRO_SQL
-order by p.email, mensagens desc;
+order by ${EMAIL_EXPR}, mensagens desc;
 "
 
 titulo "4) Registros órfãos (sem número atribuído = dado antigo)"
 q "
 select
-  p.email as cadastro,
+  ${EMAIL_EXPR} as cadastro,
   (select count(*) from public.crm_contacts c
      where c.user_id = p.id and c.whatsapp_number_id is null) as contatos_orfaos,
   (select count(*) from public.crm_messages m
@@ -176,7 +176,7 @@ if ! command -v jq >/dev/null; then c_warn "  jq não instalado (sudo apt-get in
       c_warn "     meta_waba_id vazio: não consigo checar o webhook (preencha no CRM)."
     fi
   done < <(psql "$DB" -X -tA -F'|' -c "
-      select p.email, coalesce(n.label,''), coalesce(n.meta_phone_number_id,''),
+      select ${EMAIL_EXPR}, coalesce(n.label,''), coalesce(n.meta_phone_number_id,''),
              coalesce(n.meta_waba_id,''), coalesce(n.meta_access_token,'')
       from public.crm_whatsapp_numbers n
       join auth.users p on p.id = n.user_id
