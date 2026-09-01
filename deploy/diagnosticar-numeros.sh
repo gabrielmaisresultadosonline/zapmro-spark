@@ -184,18 +184,27 @@ if ! command -v jq >/dev/null; then c_warn "  jq não instalado (sudo apt-get in
 fi
 
 # ---------------------------------------------------------------------------
-titulo "6) Logs recentes das Edge Functions (webhook recebido?)"
+titulo "6) Logs das Edge Functions (separando ANTES e DEPOIS do deploy)"
 if docker ps --format '{{.Names}}' | grep -q '^zapmro-functions$'; then
-  echo "  últimas linhas com 'webhook' / 'phone_number_id' / 'error':"
-  docker logs --since 6h zapmro-functions 2>&1 \
-    | grep -iE 'webhook|phone_number_id|whatsapp_number|re-engagement|error' \
-    | tail -60 || c_warn "  nenhuma linha relevante nas últimas 6h"
+  INICIO_CONTAINER="$(docker inspect -f '{{.State.StartedAt}}' zapmro-functions 2>/dev/null)"
+  echo "  container iniciado em: ${INICIO_CONTAINER:-desconhecido}"
   echo
-  c_warn "  Para acompanhar ao vivo (mande uma mensagem para o número parado enquanto observa):"
-  echo   "     docker logs -f --since 1m zapmro-functions | grep -iE 'webhook|phone_number_id|error'"
+  c_warn "  --- LOGS ANTIGOS (antes deste container subir; erros aqui NÃO valem mais) ---"
+  docker logs --until "${INICIO_CONTAINER:-1h}" zapmro-functions 2>&1 \
+    | grep -iE 'webhook|phone_number_id|ON CONFLICT|error' | tail -15 \
+    || echo "  (sem logs antigos)"
+  echo
+  c_ok "  --- LOGS DA VERSÃO ATUAL (é isso que importa) ---"
+  docker logs --since "${INICIO_CONTAINER:-10m}" zapmro-functions 2>&1 \
+    | grep -iE 'webhook|phone_number_id|whatsapp_number|ON CONFLICT|re-engagement|error' \
+    | tail -60 || c_warn "  nenhuma linha relevante desde o start"
+  echo
+  c_warn "  Teste ao vivo (mande uma mensagem para o número parado enquanto observa):"
+  echo   "     docker logs -f --since 1m zapmro-functions | grep -iE 'webhook|phone_number_id|ON CONFLICT|error'"
 else
   c_warn "  container zapmro-functions não está rodando: docker compose -f deploy/postgres-stack/docker-compose.yml up -d functions"
 fi
+
 
 titulo "Como ler o resultado"
 cat <<'FIM'
