@@ -3113,6 +3113,9 @@ async function autoPushGoogleContactsForAllUsers(supabase: any) {
       .from('crm_google_accounts')
       .select('*')
       .eq('auto_sync', true)
+      // Contas marcadas para reconexão ficam de fora até o usuário reconectar.
+      .or('connection_status.is.null,connection_status.eq.active')
+
       .order('updated_at', { ascending: false });
     if (!accounts || accounts.length === 0) return;
 
