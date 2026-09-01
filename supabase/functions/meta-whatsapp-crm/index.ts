@@ -1016,12 +1016,17 @@ async function saveOutboundEcho(
       const mediaId = node?.id;
       if (mediaId) {
         try {
-          const { data: echoSettings } = await supabase
-            .from('crm_settings')
-            .select('meta_access_token')
-            .eq('user_id', userId)
-            .maybeSingle();
-          const token = echoSettings?.meta_access_token;
+          // Prioriza o token da própria caixa; crm_settings é só compatibilidade
+          // para cadastros antigos de um único número.
+          let token = numberAccessToken;
+          if (!token) {
+            const { data: echoSettings } = await supabase
+              .from('crm_settings')
+              .select('meta_access_token')
+              .eq('user_id', userId)
+              .maybeSingle();
+            token = echoSettings?.meta_access_token || null;
+          }
           if (token) {
             echoMediaUrl = await fetchAndStoreIncomingMedia(
               supabase,
@@ -1050,6 +1055,8 @@ async function saveOutboundEcho(
       media_url: echoMediaUrl,
       metadata: { raw: echo, source: 'echo_mobile_app' },
       user_id: userId,
+      ...echoNumberPatch,
+
       // Preserve the real send order from the WhatsApp client (phone/desktop).
       // Webhook events can arrive out-of-order; rely on Meta's timestamp so the
       // chat renders in the same order the user actually sent the messages.
