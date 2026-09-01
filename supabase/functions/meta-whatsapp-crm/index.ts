@@ -1555,14 +1555,49 @@ else if (message.type === "unsupported") {
         contactForSave = retryContact;
         console.log('[WEBHOOK] Contact duplicate resolved via retry', { waId, contact_id: contactForSave.id });
       } else {
-        console.error('[WEBHOOK] Failed to resolve contact creation', {
-          waId,
-          userId,
-          whatsapp_number_id: inboundNumberId,
-          error: createContactError?.message || 'insert returned no row',
-        });
-        return jsonResponse({ success: false, error: createContactError?.message || 'contact_create_failed' }, 500);
+        // Rede de segurança: em bancos onde a migração 091 ainda não rodou,
+        // sobrevive o índice único crm_contacts_user_canon_wa_id_key
+        // (user_id + canon_wa_id, SEM a caixa). Nesse caso o contato existe,
+        // mas em OUTRA caixa do mesmo cadastro — a busca acima, escopada pelo
+        // whatsapp_number_id, não o encontra e a mensagem era descartada com
+        // HTTP 500. Aqui reaproveitamos o contato existente para não perder a
+        // mensagem, e adotamos a caixa quando ela ainda está vazia.
+        const { data: legacyContact } = await supabase
+          .from('crm_contacts')
+          .select('id, total_messages_received, last_message_received_at, whatsapp_number_id')
+          .in('wa_id', variantsForSave)
+          .eq('user_id', userId)
+          .order('last_message_received_at', { ascending: false, nullsFirst: true })
+          .limit(1)
+          .maybeSingle();
+
+        if (legacyContact) {
+          contactForSave = legacyContact;
+          if (inboundNumberId && !legacyContact.whatsapp_number_id) {
+            await supabase
+              .from('crm_contacts')
+              .update({ whatsapp_number_id: inboundNumberId })
+              .eq('id', legacyContact.id);
+          }
+          console.warn('[WEBHOOK] Contato reaproveitado de outra caixa (migração 091 pendente?)', {
+            waId,
+            userId,
+            contact_id: legacyContact.id,
+            caixa_do_contato: legacyContact.whatsapp_number_id,
+            caixa_da_mensagem: inboundNumberId,
+            error: createContactError?.message || null,
+          });
+        } else {
+          console.error('[WEBHOOK] Failed to resolve contact creation', {
+            waId,
+            userId,
+            whatsapp_number_id: inboundNumberId,
+            error: createContactError?.message || 'insert returned no row',
+          });
+          return jsonResponse({ success: false, error: createContactError?.message || 'contact_create_failed' }, 500);
+        }
       }
+
     } else {
       contactForSave = newContact;
       console.log('[WEBHOOK] Handled inbound contact (insert)', {
