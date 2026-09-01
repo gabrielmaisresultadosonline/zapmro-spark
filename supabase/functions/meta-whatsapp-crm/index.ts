@@ -6103,6 +6103,8 @@ async function fetchAndStoreIncomingMedia(
 
       return new Response(JSON.stringify({ success: true, account }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+
 
     }
 
