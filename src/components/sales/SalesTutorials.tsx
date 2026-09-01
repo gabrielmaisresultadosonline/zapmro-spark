@@ -311,6 +311,7 @@ function ModuleSection({
           <button
             key={v.id}
             onClick={() => onPlay(v)}
+            {...videoPrefetchHandlers(resolveMediaUrl(v.video_url))}
             className={cn(
               "group relative rounded-xl overflow-hidden text-left transition-all hover:-translate-y-1 hover:shadow-2xl",
               isDark ? "bg-[#111b21] ring-1 ring-white/5" : "bg-white shadow-md ring-1 ring-slate-100"
