@@ -1,85 +1,65 @@
-# Correção definitiva do recebimento WhatsApp após multi-número
+# Plano: fazer o número em Coexistência (SMB) receber mensagens
 
-## Diagnóstico confirmado
+## Diagnóstico (o que os logs provam)
 
-O build do frontend terminou normalmente; os arquivos `dist/assets/...` não são erro. A falha está no processamento do webhook na Edge Function.
+O número `+55 67 9875-3004` (`1277217672141708`) está em **Coexistência / SMB**:
 
-Há quatro problemas distintos a tratar em conjunto:
+- `platform_type: CLOUD_API`, `status: CONNECTED`, mas `code_verification_status: NOT_VERIFIED`.
+- `/register` responde `Register endpoint is not available for SMB businesses` e `/two_step_verification` não existe nesse modo.
 
-1. **A VPS registrou execução de código antigo:** o log `ReferenceError: webhookPhoneNumberId is not defined` corresponde à versão anterior do handler. No código atual, a variável já está declarada no escopo da função. Porém o diagnóstico lê seis horas de logs e não separa eventos anteriores e posteriores ao deploy, então ainda não prova qual versão processou a última mensagem.
-2. **Criação de contatos pode falhar após a migração 088:** o webhook usa `upsert(... onConflict: 'wa_id,user_id,whatsapp_number_id')`, mas o SQL criou um índice único parcial. O PostgreSQL/PostgREST pode não reconhecer esse índice parcial como alvo do `ON CONFLICT`; para contato novo, isso pode retornar erro e impedir a gravação da mensagem em qualquer cadastro.
-3. **Ainda existem consultas sem escopo do número:** o contato é corretamente localizado por número no início, mas depois é buscado novamente apenas por `user_id + wa_id`. Ecos enviados pelo celular, mídia, edição, deduplicação e etapas de fluxo também têm trechos que usam as configurações principais ou não filtram `whatsapp_number_id`. Isso pode selecionar a conversa da outra caixa.
-4. **O script de diagnóstico não é compatível com o schema real da VPS:** ele pressupõe `auth.users.email`, coluna que não existe nessa instalação, e por isso os blocos 2–5 não executam. Além disso, exibe logs antigos junto dos novos.
+Isso **não é bug do nosso sistema e não tem correção via `/register`**: números onboardados em Coexistência ficam permanentemente `NOT_VERIFIED` e continuam funcionando no celular. Nesse modo a Meta só entrega conversas para a Cloud API se o webhook estiver assinando os **campos de coexistência**.
 
-Os erros de Google Sync `403` e falhas transitórias para `gateway:8000` são problemas paralelos; serão identificados no relatório, mas não serão misturados à correção do webhook para evitar alterar outras partes do sistema.
+O ponto que é nosso: hoje o app assina apenas o campo `messages` (comentário explícito em `supabase/functions/meta-whatsapp-crm/index.ts`, na função de inscrição do webhook). Sem `smb_message_echoes` / `smb_app_state_sync` / `history`, a caixa em coexistência fica exatamente como está: zerada. O handler de `message_echoes` já existe no webhook, mas o campo nunca é assinado nem o nome SMB do campo é reconhecido.
 
-## Implementação
+## O que será implementado
 
-### 1. Tornar a resolução do número única e obrigatória no webhook
+### 1. Assinatura do webhook com os campos de coexistência (com degradação segura)
+Em `meta-whatsapp-crm`, na inscrição de app (`POST /{APP_ID}/subscriptions`):
 
-- Resolver `phone_number_id` uma única vez, no começo de cada unidade do payload, buscando primeiro em `crm_whatsapp_numbers` e usando `crm_settings` apenas como compatibilidade para cadastros antigos.
-- Produzir um contexto imutável do evento com `user_id`, `whatsapp_number_id`, token, `phone_number_id` e WABA.
-- Para mensagens recebidas, recusar gravação ambígua quando o payload contém `phone_number_id` mas ele não pertence a nenhum cadastro; retornar HTTP 200 para a Meta não criar tempestade de retries, com log estruturado e motivo explícito.
-- Manter funcionamento dos cadastros antigos de um número: se ainda não existir linha em `crm_whatsapp_numbers`, usar a credencial de `crm_settings` e criar/gravar com o fallback compatível previsto pela migração.
+- 1ª tentativa: `messages,smb_message_echoes,smb_app_state_sync,history,message_template_status_update`.
+- Se a Meta recusar por permissão (o motivo do comentário atual), **retry automático apenas com `messages`**, registrando o campo recusado no log. Assim nunca voltamos a quebrar o recebimento das outras caixas.
+- Resultado (campos efetivamente aceitos) devolvido no retorno para aparecer no diagnóstico.
 
-### 2. Corrigir gravação de contatos e mensagens
+### 2. Reconhecer os payloads SMB no webhook
+No roteamento por `changes[].field`:
 
-- Substituir o `upsert` dependente do índice parcial por fluxo seguro: buscar por `(user_id, whatsapp_number_id, variantes do wa_id)`, tentar `insert`, e em corrida de concorrência buscar novamente a mesma chave.
-- Gravar `whatsapp_number_id` explicitamente em todo contato e toda mensagem recebida; o trigger fica apenas como proteção para chamadas legadas.
-- Escopar por número a deduplicação, edição, releitura do contato após a gravação e todas as decisões de IA/fluxo.
-- Validar o retorno de cada insert/update. Nenhuma falha de banco poderá continuar silenciosamente até uma etapa posterior.
-- Preservar dados existentes; nenhuma conversa ou mensagem será apagada.
+- `smb_message_echoes` → tratar como `message_echoes` (reaproveita o handler já existente de mensagem enviada pelo celular).
+- Aceitar echoes vindos tanto em `value.message_echoes` quanto em `value.smb_message_echoes`.
+- `smb_app_state_sync` e `history` → log estruturado + ingestão idempotente das mensagens de histórico (mesma dedupe por `meta_message_id`), sempre com `whatsapp_number_id` da caixa, para não misturar números.
+- Nenhuma mudança no fluxo `messages` atual.
 
-### 3. Corrigir caminhos secundários do mesmo webhook
+### 3. Script de reparo `deploy/reparar-coexistencia.sh`
+Um comando único para rodar na VPS, por `PHONE_NUMBER_ID`:
 
-- Alterar `saveOutboundEcho` para receber o contexto do número, buscar/criar contato na caixa correta e gravar `whatsapp_number_id`.
-- Buscar mídia com o token do número que recebeu/enviou o evento, não com o token global de `crm_settings`.
-- Escopar atualização de mensagens editadas e deduplicação por `whatsapp_number_id` quando conhecido.
-- Passar a caixa correta ao executor de fluxos e respostas automáticas, garantindo que a resposta saia pelo mesmo número da conversa.
-- Manter sincronização de status por `meta_message_id`, adicionando o número como filtro defensivo quando disponível.
+1. Lê token/WABA da caixa no Postgres (mesma lógica do diagnóstico atual).
+2. `GET /{APP_ID}/subscriptions` — mostra quais campos estão assinados hoje.
+3. Reassina com os campos SMB (com fallback igual ao item 1).
+4. `POST /{WABA}/subscribed_apps` (idempotente).
+5. Reimprime `GET /{PHONE_NUMBER_ID}` e escuta o tráfego por 90s, indicando se chegou algo.
 
-### 4. Fortalecer a migração sem risco aos 74 mil registros
+### 4. Diagnóstico e mensagens
+- `deploy/diagnosticar-um-numero.sh`: passa a exibir os campos assinados do app e alerta explicitamente quando a caixa é SMB e falta `smb_message_echoes`.
+- `deploy/registrar-numero-cloudapi.sh`: em modo SMB, para de tentar PIN e aponta para o novo script de reparo.
 
-- Criar uma nova migração idempotente, sem reexecutar ou alterar destrutivamente a 088.
-- Conferir duplicidades reais antes de qualquer constraint/índice adicional.
-- Garantir índices eficientes para contatos e mensagens por `(user_id, whatsapp_number_id)` e busca de número por `meta_phone_number_id`.
-- Corrigir somente o mecanismo necessário à concorrência do webhook; não mover históricos já atribuídos automaticamente, pois isso poderia associar dados antigos ao número errado.
-- Incluir consultas de auditoria para: números sem dono, IDs Meta duplicados, registros órfãos e contatos duplicados dentro da mesma caixa.
+## Limite honesto do que o código resolve
 
-### 5. Refazer o diagnóstico da VPS
+Se o cliente **não concluiu a etapa de sincronizar o app** no Embedded Signup (celular: Configurações > Ferramentas comerciais > API), nenhuma assinatura de webhook fará mensagens chegarem — a WABA existe mas sem vínculo de conversas. Nesse caso as opções são:
 
-- Detectar dinamicamente onde o e-mail está armazenado (`auth.users`, metadados ou identidade), sem assumir uma coluna fixa.
-- Passar o filtro de e-mail ao `psql` como variável segura, evitando interpolação SQL.
-- Mostrar todos os cadastros quando o e-mail não puder ser resolvido, em vez de abortar os blocos seguintes.
-- Separar logs anteriores ao deploy dos logs gerados pelo teste atual.
-- Adicionar uma identificação inequívoca da versão ativa: commit do repositório, hash do arquivo montado dentro do container, horário de início do container e marcador de versão emitido pela função.
-- Para cada `phone_number_id`, cruzar: dono, número interno, token preenchido, assinatura WABA, último inbound no banco e último evento no log.
-- Ocultar tokens e demais segredos da saída.
+- refazer o Embedded Signup no CRM até o fim, aceitando a sync no celular; ou
+- migrar o número de verdade para Cloud API (sai do app WhatsApp Business), aí `/register` + PIN passam a funcionar e o número vira `VERIFIED`.
 
-### 6. Garantir que a VPS carregue o código novo
+O plano acima garante que, do nosso lado, tudo que é necessário esteja assinado e tratado.
 
-- Ajustar a atualização das funções para recriar o container quando necessário, em vez de depender apenas de `restart` com worker/cache existente.
-- Após subir, comparar o hash do arquivo no host com o arquivo montado em `/home/deno/functions/meta-whatsapp-crm/index.ts`.
-- Limpar o ponto de corte dos logs e executar uma chamada de saúde antes de liberar o teste real.
-- Não tocar nos volumes do PostgreSQL, Auth ou Storage.
+## Passos na VPS após o deploy
 
-## Validação obrigatória
+```bash
+cd /var/www/ia-mro && git fetch origin && git reset --hard origin/main
+./deploy/atualizar.sh
+./deploy/reparar-coexistencia.sh 1277217672141708
+```
 
-1. **Teste automatizado de webhook:** payload Meta de um cadastro antigo com um número, primeiro e segundo número de um cadastro multi-número, contato novo, contato existente, mídia, eco e status.
-2. **Isolamento:** o mesmo cliente enviando para dois números deve criar/usar dois contatos independentes e mensagens com IDs de caixa diferentes.
-3. **Regressão single-number:** cadastros antigos continuam recebendo mesmo quando só `crm_settings` estiver preenchido.
-4. **Concorrência:** duas entregas simultâneas da mesma mensagem geram uma única mensagem, sem erro 500.
-5. **VPS após deploy:** zerar o ponto de leitura dos logs, enviar uma mensagem real para pelo menos um cadastro comum e para os dois números do cadastro multi-número, e confirmar no banco o `whatsapp_number_id` correto.
-6. **Qualidade:** build sem erros e ausência de novos `ReferenceError`, falhas de `ON CONFLICT` e `missing_user` nos eventos de teste.
+## Arquivos afetados
 
-## Publicação segura e rollback
-
-1. Fazer backup antes da nova migração.
-2. Aplicar a migração idempotente.
-3. Recriar somente o container de funções e verificar hashes.
-4. Executar os testes reais controlados antes de considerar o serviço normalizado.
-5. Se a validação falhar, restaurar imediatamente a versão anterior da Edge Function; a migração será aditiva e não exigirá apagar ou restaurar dados.
-
-## Critério de conclusão
-
-A correção só será considerada concluída quando os três cenários — cadastro comum, número principal e segundo número — receberem e gravarem mensagens após o mesmo deploy, sem mistura de histórico, com o número correto registrado e sem erro no log novo.
+- `supabase/functions/meta-whatsapp-crm/index.ts` (assinatura de campos + roteamento SMB)
+- `deploy/reparar-coexistencia.sh` (novo)
+- `deploy/diagnosticar-um-numero.sh`, `deploy/registrar-numero-cloudapi.sh` (relatório/orientação)
