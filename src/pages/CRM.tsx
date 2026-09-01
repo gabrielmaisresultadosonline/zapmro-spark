@@ -3043,6 +3043,7 @@ const CRM = () => {
           action: 'sendMessage',
           to: targetContact.wa_id,
           text: textToSend,
+          ...numberScopePatch(),
           metadata: { source: 'manual_resend', resent_from: message.id },
         },
       });
@@ -3105,7 +3106,7 @@ const CRM = () => {
 
         console.log('[CRM][sendText] →', { to: targetWaId, len: textToSend.length, preview: textToSend.slice(0, 80) });
         const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
-          body: { action: 'sendMessage', to: targetWaId, text: textToSend, metadata: { source: 'manual_send' } }
+          body: { action: 'sendMessage', to: targetWaId, text: textToSend, ...numberScopePatch(), metadata: { source: 'manual_send' } }
         });
         console.log('[CRM][sendText] ← resp', { error, data });
         if (error) throw error;
@@ -3683,6 +3684,8 @@ const CRM = () => {
         .from('crm_messages')
         .insert({
           contact_id: targetContactId,
+          user_id: currentUserIdRef.current ?? selectedContact?.user_id ?? null,
+          ...numberScopePatch(),
           direction: 'outbound',
           message_type: 'audio',
           content: '[Mensagem de Áudio]',
@@ -3843,6 +3846,7 @@ const CRM = () => {
         body: { 
           action: 'sendMessage', 
           to: targetWaId,
+          ...numberScopePatch(),
           audioUrl: type === 'audio' ? publicUrl : undefined,
           imageUrl: type === 'image' ? publicUrl : undefined,
           videoUrl: type === 'video' ? publicUrl : undefined,
@@ -3958,6 +3962,7 @@ const CRM = () => {
         body: {
           action: 'sendMessage',
           to: targetWaId,
+          ...numberScopePatch(),
           audioUrl: msg.media_url,
           isVoice: true,
           skipLocalSave: true
@@ -4356,6 +4361,7 @@ const CRM = () => {
         body: { 
           action: 'sendTemplate', 
           to: targetWaId, 
+          ...numberScopePatch(),
           templateName, 
           languageCode: language,
           components: components

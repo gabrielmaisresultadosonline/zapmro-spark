@@ -2634,7 +2634,7 @@ async function markGoogleAccountReconnectRequired(
   errorMessage: string,
 ) {
   try {
-    await supabase.from('crm_google_accounts').update({
+    const { error } = await supabase.from('crm_google_accounts').update({
       connection_status: 'reconnect_required',
       auto_sync: false,
       last_sync_error_code: errorCode,
@@ -2642,9 +2642,19 @@ async function markGoogleAccountReconnectRequired(
       last_sync_error_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', accountId);
+    if (error) {
+      // Instalação sem a migração 092: as colunas de saúde ainda não existem.
+      // Ainda assim precisamos parar o loop de 403 — desligamos só o auto_sync.
+      console.warn('[GOOGLE-SYNC] Update de saúde falhou, aplicando fallback:', error.message);
+      await supabase.from('crm_google_accounts').update({
+        auto_sync: false,
+        updated_at: new Date().toISOString(),
+      }).eq('id', accountId);
+    }
   } catch (e) {
     console.warn('[GOOGLE-SYNC] Não foi possível marcar reconexão necessária:', (e as any)?.message);
   }
+
 }
 
 
@@ -3688,6 +3698,7 @@ async function handleInternalSendMessage(supabase: any, phoneNumberId: string, a
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: userId || contact.user_id || null,
+        ...(params.whatsapp_number_id || contact.whatsapp_number_id ? { whatsapp_number_id: params.whatsapp_number_id || contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: messageType,
         content,
@@ -3716,6 +3727,7 @@ async function handleInternalSendMessage(supabase: any, phoneNumberId: string, a
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: userId || contact.user_id || null,
+        ...(params.whatsapp_number_id || contact.whatsapp_number_id ? { whatsapp_number_id: params.whatsapp_number_id || contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: messageTypeNc,
         content: contentNc,
@@ -3743,11 +3755,16 @@ async function handleInternalSendMessage(supabase: any, phoneNumberId: string, a
     
     // IMPORTANTE: Garantir que o userId esteja presente para aparecer na tela do usuário correto
     const finalUserId = userId || contact.user_id || null;
+    // A mensagem precisa carregar a caixa (número) da conversa: todas as telas
+    // escopadas por número filtram por whatsapp_number_id.
+    const outboundNumberId = params.whatsapp_number_id || contact.whatsapp_number_id || null;
 
     const { data: savedMessage, error: insertError } = await supabase.from('crm_messages').insert({
       contact_id: contact.id,
       user_id: finalUserId,
+      ...(outboundNumberId ? { whatsapp_number_id: outboundNumberId } : {}),
       direction: 'outbound',
+
       message_type: messageType,
       content: content,
       media_url: media?.url || null,
@@ -3999,6 +4016,7 @@ async function internalSendTemplate(
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: contact.user_id || userId || null,
+        ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: 'template',
         content: `[Template: ${templateName}]`,
@@ -4026,6 +4044,7 @@ async function internalSendTemplate(
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: contact.user_id || userId || null,
+        ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: 'template',
         content: `[Template: ${templateName}]`,
@@ -4075,6 +4094,7 @@ async function internalSendTemplate(
     const { data: savedMessage, error: insertError } = await supabase.from('crm_messages').insert({
       contact_id: contact.id,
       user_id: contact.user_id || userId || null,
+      ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
       direction: 'outbound',
       message_type: isCarousel ? 'carousel' : 'template',
       content: `[Template: ${templateName}]`,
@@ -5532,11 +5552,27 @@ async function fetchAndStoreIncomingMedia(
       const normalizedTo = normalizePhone(to);
       const variants = getBrazilianPhoneVariants(normalizedTo);
 
-      const { data: existingContact, error: contactLookupError } = await supabase
-        .from('crm_contacts')
-        .select('*')
-        .in('wa_id', variants)
-        .eq('user_id', userId)
+      // Multi-número: o template pertence à caixa que está enviando.
+      const templatePhoneNumberId =
+        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id;
+      let templateNumberId: string | null = scopedNumberId;
+      if (!templateNumberId && templatePhoneNumberId) {
+        const numberRowForTemplate = await getWhatsAppNumberByPhoneId(supabase, templatePhoneNumberId);
+        if (numberRowForTemplate && (!userId || numberRowForTemplate.user_id === userId)) {
+          templateNumberId = numberRowForTemplate.id;
+        }
+      }
+      const templateScope = <T,>(query: T): T =>
+        templateNumberId ? ((query as any).eq('whatsapp_number_id', templateNumberId) as T) : query;
+      const templateNumberPatch = templateNumberId ? { whatsapp_number_id: templateNumberId } : {};
+
+      const { data: existingContact, error: contactLookupError } = await templateScope(
+        supabase
+          .from('crm_contacts')
+          .select('*')
+          .in('wa_id', variants)
+          .eq('user_id', userId)
+      )
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1)
         .maybeSingle();
@@ -5558,6 +5594,7 @@ async function fetchAndStoreIncomingMedia(
             user_id: userId,
             status: 'new',
             source_type: 'broadcast',
+            ...templateNumberPatch,
           })
           .select('*')
           .maybeSingle();
@@ -5566,11 +5603,13 @@ async function fetchAndStoreIncomingMedia(
           console.error('[TEMPLATE] Falha ao criar contato da lista fria:', createContactError.message);
 
           // Proteção para uma possível criação concorrente do mesmo número.
-          const { data: concurrentContact } = await supabase
-            .from('crm_contacts')
-            .select('*')
-            .in('wa_id', variants)
-            .eq('user_id', userId)
+          const { data: concurrentContact } = await templateScope(
+            supabase
+              .from('crm_contacts')
+              .select('*')
+              .in('wa_id', variants)
+              .eq('user_id', userId)
+          )
             .order('created_at', { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -5592,13 +5631,13 @@ async function fetchAndStoreIncomingMedia(
       const { contactId: providedContactId, broadcastId } = params;
       const response = await internalSendTemplate(
         supabase, 
-        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id, 
+        templatePhoneNumberId,
         meta_access_token || settings?.meta_access_token || params.meta_access_token, 
         to, 
         templateName, 
         languageCode || 'pt_BR', 
         manualComponents, 
-        contact,
+        { ...contact, whatsapp_number_id: contact.whatsapp_number_id || templateNumberId || null },
         null,
         providedContactId,
         broadcastId
@@ -5613,11 +5652,30 @@ async function fetchAndStoreIncomingMedia(
       const normalizedTo = normalizePhone(params.to);
       const variants = getBrazilianPhoneVariants(normalizedTo);
 
-      const { data: contactRows } = await supabase
-        .from('crm_contacts')
-        .select('*')
-        .in('wa_id', variants)
-        .eq('user_id', userId)
+      // Multi-número: a conversa pertence a UMA caixa. Se o app não mandou o
+      // número aberto, resolvemos pelo phone_number_id que será usado no envio.
+      // Sem isso, um cadastro com 2 números gravava a mensagem no contato da
+      // outra caixa e ela nunca aparecia no chat aberto.
+      const sendPhoneNumberId =
+        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id;
+      let sendNumberId: string | null = scopedNumberId;
+      if (!sendNumberId && sendPhoneNumberId) {
+        const numberRowForSend = await getWhatsAppNumberByPhoneId(supabase, sendPhoneNumberId);
+        if (numberRowForSend && (!userId || numberRowForSend.user_id === userId)) {
+          sendNumberId = numberRowForSend.id;
+        }
+      }
+      const sendScope = <T,>(query: T): T =>
+        sendNumberId ? ((query as any).eq('whatsapp_number_id', sendNumberId) as T) : query;
+      const sendNumberPatch = sendNumberId ? { whatsapp_number_id: sendNumberId } : {};
+
+      const { data: contactRows } = await sendScope(
+        supabase
+          .from('crm_contacts')
+          .select('*')
+          .in('wa_id', variants)
+          .eq('user_id', userId)
+      )
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1);
       let contact: any = contactRows && contactRows.length > 0 ? contactRows[0] : null;
@@ -5625,17 +5683,18 @@ async function fetchAndStoreIncomingMedia(
       if (!contact && userId) {
         const insertResult = await supabase
           .from('crm_contacts')
-          .insert({ wa_id: canonicalBrazilianWaId(normalizedTo), name: canonicalBrazilianWaId(normalizedTo), user_id: userId, status: 'new', source_type: 'manual_send' })
+          .insert({ wa_id: canonicalBrazilianWaId(normalizedTo), name: canonicalBrazilianWaId(normalizedTo), user_id: userId, status: 'new', source_type: 'manual_send', ...sendNumberPatch })
           .select('*')
           .maybeSingle();
         if (insertResult.error) {
           // Pode ser corrida ou variante já existente — reaproveita a conversa existente.
-          const { data: retryRows } = await supabase
-            .from('crm_contacts')
-            .select('*')
-            .in('wa_id', variants)
-            .eq('user_id', userId)
-            .limit(1);
+          const { data: retryRows } = await sendScope(
+            supabase
+              .from('crm_contacts')
+              .select('*')
+              .in('wa_id', variants)
+              .eq('user_id', userId)
+          ).limit(1);
           contact = retryRows && retryRows.length > 0 ? retryRows[0] : null;
           if (!contact) console.error('[ACTION] Failed to create contact:', insertResult.error.message);
         } else {
@@ -5649,17 +5708,21 @@ async function fetchAndStoreIncomingMedia(
       }
         
       const finalUserId = userId || contact?.user_id || null;
-      console.log(`[ACTION] Usando userId ${finalUserId} para sendMessage`);
+      console.log(`[ACTION] Usando userId ${finalUserId} para sendMessage`, {
+        whatsapp_number_id: sendNumberId,
+        contact_id: contact?.id || null,
+      });
 
       const response = await handleInternalSendMessage(
         supabase, 
-        meta_phone_number_id || settings?.meta_phone_number_id || params.meta_phone_number_id, 
+        sendPhoneNumberId,
         meta_access_token || settings?.meta_access_token || params.meta_access_token, 
-        params, 
+        { ...params, whatsapp_number_id: sendNumberId || params.whatsapp_number_id || null },
         contact, 
         settings?.vps_transcoder_url,
         finalUserId
       );
+
       console.log(`[ACTION] sendMessage finalizado para ${params.to}. Status: ${response.status}`);
       return response;
     }
