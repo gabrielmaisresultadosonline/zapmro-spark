@@ -2425,14 +2425,19 @@ const CRM = () => {
       if (error) throw error;
 
       const valid = data?.valid === true;
+      const code = data?.code ? String(data.code) : undefined;
       const message = String(data?.message || (valid ? 'API correta.' : 'API ERRADA.'));
       const detail = data?.provider_message ? String(data.provider_message) : undefined;
 
-      setOpenAiKeyCheck({ state: valid ? 'valid' : 'invalid', message, detail });
+      setOpenAiKeyCheck({ state: valid ? 'valid' : 'invalid', code, message, detail });
 
       if (!opts.silent) {
         toast({
-          title: valid ? 'API correta ✅' : 'API ERRADA ❌',
+          title: valid
+            ? 'API correta ✅'
+            : code === 'no_credits'
+              ? 'SEM SALDO na OpenAI 💳'
+              : 'API ERRADA ❌',
           description: detail ? `${message} (${detail})` : message,
           variant: valid ? 'default' : 'destructive',
         });
@@ -7883,8 +7888,18 @@ const CRM = () => {
                                 <p className="text-[11px] font-bold text-[#00875A]">API correta ✅ {openAiKeyCheck.message}</p>
                               )}
                               {openAiKeyCheck.state === 'invalid' && (
-                                <p className="text-[11px] font-bold text-destructive">
-                                  API ERRADA ❌ {openAiKeyCheck.message}
+                                <p
+                                  className={cn(
+                                    'text-[11px] font-bold',
+                                    openAiKeyCheck.code === 'no_credits'
+                                      ? 'text-amber-600'
+                                      : 'text-destructive'
+                                  )}
+                                >
+                                  {openAiKeyCheck.code === 'no_credits'
+                                    ? 'SEM SALDO 💳 '
+                                    : 'API ERRADA ❌ '}
+                                  {openAiKeyCheck.message}
                                   {openAiKeyCheck.detail ? ` — ${openAiKeyCheck.detail}` : ''}
                                 </p>
                               )}
