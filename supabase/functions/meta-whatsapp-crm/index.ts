@@ -823,22 +823,28 @@ ${aiPrompt}
       
       // If there's a message to send before transferring, send it
       if (cleanReply) {
-        const settings = aiSettings || await getCrmSettings(supabase, userId);
+        const settings = aiSettings;
         if (settings) {
           const messageParts = cleanReply.split(/\n\n+/).filter(p => p.trim()).slice(0, 3);
           for (const part of messageParts) {
-            await handleInternalSendMessage(
-              supabase, 
-              settings.meta_phone_number_id, 
-              settings.meta_access_token, 
-              { 
-                to: waId, 
-                text: part.trim(),
-                metadata: { source_message_id: sourceMessageId }
-              }, 
-              contact,
-              settings.vps_transcoder_url
-            );
+            try {
+              await handleInternalSendMessage(
+                supabase,
+                settings.meta_phone_number_id,
+                settings.meta_access_token,
+                {
+                  to: waId,
+                  text: part.trim(),
+                  whatsapp_number_id: boxId,
+                  metadata: { source_message_id: sourceMessageId }
+                },
+                contact,
+                settings.vps_transcoder_url,
+                userId || contact.user_id
+              );
+            } catch (transferSendErr: any) {
+              aiLog('transfer_send_failed', { error: transferSendErr?.message || String(transferSendErr) });
+            }
             if (messageParts.length > 1) await wait(1500);
           }
         }
