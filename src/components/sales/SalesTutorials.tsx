@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Play, ExternalLink, BookOpen, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { resolveMediaUrl } from "@/lib/mediaUrl";
+import { prefetchVideo, videoPrefetchHandlers } from "@/lib/videoPrefetch";
 
 type Module = {
   id: string;
@@ -147,6 +148,8 @@ export default function SalesTutorials({ variant = "light" }: SalesTutorialsProp
                 videos={g.videos}
                 isDark={isDark}
                 onPlay={(v) => {
+                  // Garante que o início do arquivo já esteja a caminho antes do modal montar.
+                  prefetchVideo(resolveMediaUrl(v.video_url));
                   setVideoLoading(true);
                   setActive(v);
                 }}
@@ -190,13 +193,17 @@ export default function SalesTutorials({ variant = "light" }: SalesTutorialsProp
                       </div>
                     )}
                     <video
+                      key={active.id}
                       src={resolveMediaUrl(active.video_url)}
                       poster={resolveMediaUrl(active.cover_url) || undefined}
                       controls
                       autoPlay
                       playsInline
-                      preload="metadata"
+                      // "auto" pede o buffer inicial de imediato; com o prefetch do card
+                      // o começo do arquivo normalmente já está em cache HTTP.
+                      preload="auto"
                       controlsList="nodownload"
+                      onLoadedMetadata={() => setVideoLoading(false)}
                       onLoadedData={() => setVideoLoading(false)}
                       onCanPlay={() => setVideoLoading(false)}
                       onWaiting={() => setVideoLoading(true)}
@@ -304,6 +311,7 @@ function ModuleSection({
           <button
             key={v.id}
             onClick={() => onPlay(v)}
+            {...videoPrefetchHandlers(resolveMediaUrl(v.video_url))}
             className={cn(
               "group relative rounded-xl overflow-hidden text-left transition-all hover:-translate-y-1 hover:shadow-2xl",
               isDark ? "bg-[#111b21] ring-1 ring-white/5" : "bg-white shadow-md ring-1 ring-slate-100"

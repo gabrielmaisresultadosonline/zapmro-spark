@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { resolveMediaUrl } from "@/lib/mediaUrl";
+import { prefetchVideo, videoPrefetchHandlers } from "@/lib/videoPrefetch";
 import { BadgeCheck, PlayCircle, X, Loader2 } from "lucide-react";
 
 type Tutorial = {
@@ -46,7 +47,10 @@ export default function FirstTutorialVideo({
     <>
       <button
         type="button"
+        {...videoPrefetchHandlers(resolveMediaUrl(video.video_url))}
         onClick={() => {
+          // Pré-aquece o início do arquivo antes do modal montar o <video>.
+          prefetchVideo(resolveMediaUrl(video.video_url));
           setVideoLoading(true);
           setOpen(true);
         }}
@@ -107,8 +111,9 @@ export default function FirstTutorialVideo({
               controls
               autoPlay
               playsInline
-              preload="metadata"
+              preload="auto"
               controlsList="nodownload"
+              onLoadedMetadata={() => setVideoLoading(false)}
               onLoadedData={() => setVideoLoading(false)}
               onCanPlay={() => setVideoLoading(false)}
               onWaiting={() => setVideoLoading(true)}
