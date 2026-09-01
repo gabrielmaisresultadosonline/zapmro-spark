@@ -3688,6 +3688,7 @@ async function handleInternalSendMessage(supabase: any, phoneNumberId: string, a
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: userId || contact.user_id || null,
+        ...(params.whatsapp_number_id || contact.whatsapp_number_id ? { whatsapp_number_id: params.whatsapp_number_id || contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: messageType,
         content,
@@ -3716,6 +3717,7 @@ async function handleInternalSendMessage(supabase: any, phoneNumberId: string, a
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: userId || contact.user_id || null,
+        ...(params.whatsapp_number_id || contact.whatsapp_number_id ? { whatsapp_number_id: params.whatsapp_number_id || contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: messageTypeNc,
         content: contentNc,
@@ -4004,6 +4006,7 @@ async function internalSendTemplate(
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: contact.user_id || userId || null,
+        ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: 'template',
         content: `[Template: ${templateName}]`,
@@ -4031,6 +4034,7 @@ async function internalSendTemplate(
       await supabase.from('crm_messages').insert({
         contact_id: contact.id,
         user_id: contact.user_id || userId || null,
+        ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
         direction: 'outbound',
         message_type: 'template',
         content: `[Template: ${templateName}]`,
@@ -4080,6 +4084,7 @@ async function internalSendTemplate(
     const { data: savedMessage, error: insertError } = await supabase.from('crm_messages').insert({
       contact_id: contact.id,
       user_id: contact.user_id || userId || null,
+      ...(contact.whatsapp_number_id ? { whatsapp_number_id: contact.whatsapp_number_id } : {}),
       direction: 'outbound',
       message_type: isCarousel ? 'carousel' : 'template',
       content: `[Template: ${templateName}]`,
