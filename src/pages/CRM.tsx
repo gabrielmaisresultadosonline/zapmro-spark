@@ -1335,10 +1335,12 @@ const CRM = () => {
     try {
       const cursor = realtimeFallbackCursorRef.current;
       const firstCursor = cursor || new Date(Date.now() - 15_000).toISOString();
-      const { data } = await supabase
-        .from('crm_messages')
-        .select('*')
-        .eq('user_id', currentUserIdRef.current ?? '')
+      const { data } = await scopeToNumber(
+        supabase
+          .from('crm_messages')
+          .select('*')
+          .eq('user_id', currentUserIdRef.current ?? '')
+      )
         .gt('created_at', firstCursor)
         .order('created_at', { ascending: true })
         .limit(100); // Limite de segurança para evitar sobrecarga no realtime fallback
