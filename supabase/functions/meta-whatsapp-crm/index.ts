@@ -953,12 +953,13 @@ async function saveOutboundEcho(
     // Find or create contact
     // Busca por TODAS as variantes (com/sem 9º dígito) para nunca duplicar a conversa.
     const echoVariants = getBrazilianPhoneVariants(waId);
-    const { data: echoContactRows } = await supabase
-      .from('crm_contacts')
-      .select('id')
-      .in('wa_id', echoVariants)
-      .eq('user_id', userId)
-      .limit(1);
+    const { data: echoContactRows } = await echoScope(
+      supabase
+        .from('crm_contacts')
+        .select('id')
+        .in('wa_id', echoVariants)
+        .eq('user_id', userId)
+    ).limit(1);
     let contact: any = echoContactRows && echoContactRows.length > 0 ? echoContactRows[0] : null;
 
     if (!contact) {
@@ -971,28 +972,35 @@ async function saveOutboundEcho(
           source_type: 'whatsapp_echo',
           user_id: userId,
           last_interaction: new Date().toISOString(),
-          metadata: { source: 'meta_webhook_echo' }
+          metadata: { source: 'meta_webhook_echo' },
+          ...echoNumberPatch
         })
         .select('id')
         .maybeSingle();
-      if (createErr) {
+      if (createErr || !created) {
         // Corrida: outro processo criou o contato primeiro — reaproveita o existente.
-        const { data: retryRows } = await supabase
-          .from('crm_contacts')
-          .select('id')
-          .in('wa_id', echoVariants)
-          .eq('user_id', userId)
-          .limit(1);
+        const { data: retryRows } = await echoScope(
+          supabase
+            .from('crm_contacts')
+            .select('id')
+            .in('wa_id', echoVariants)
+            .eq('user_id', userId)
+        ).limit(1);
         if (retryRows && retryRows.length > 0) {
           contact = retryRows[0];
         } else {
-          console.error('[WEBHOOK-ECHO] Failed to create contact', { waId, error: createErr.message });
-          return { success: false, error: createErr.message };
+          console.error('[WEBHOOK-ECHO] Failed to create contact', {
+            waId,
+            whatsapp_number_id: whatsappNumberId,
+            error: createErr?.message || 'insert returned no row',
+          });
+          return { success: false, error: createErr?.message || 'contact_create_failed' };
         }
       } else {
         contact = created;
       }
     }
+
 
     // Build content/type
     const type = echo?.type || 'text';
