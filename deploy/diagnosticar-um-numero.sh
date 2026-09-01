@@ -53,41 +53,76 @@ elif [ "$(q1 "select count(*) from information_schema.columns where table_schema
 fi
 
 SOMENTE_DIGITOS="$(printf '%s' "$ALVO" | tr -cd '0-9')"
+# casa pelos ÚLTIMOS 8 dígitos: tolera DDI, 9º dígito, máscara e dígito digitado errado
+SUFIXO="$(printf '%s' "$SOMENTE_DIGITOS" | tail -c 9)"
+
+# a caixa pode estar só em crm_whatsapp_numbers (multi-número) OU ainda em crm_settings (legado)
+LEGADO_OK="$(q1 "select count(*) from information_schema.columns where table_schema='public' and table_name='crm_settings' and column_name='meta_phone_number_id'")"
+if [ "$LEGADO_OK" = "1" ]; then
+  UNIAO="
+    union all
+    select null::text, s.user_id, 'caixa legada (crm_settings)'::text,
+           coalesce(s.meta_display_phone_number,''), coalesce(s.meta_phone_number_id,''),
+           coalesce(s.meta_waba_id,''), coalesce(s.meta_access_token,''), true, s.updated_at
+    from public.crm_settings s
+    where coalesce(s.meta_phone_number_id,'') <> ''
+      and not exists (select 1 from public.crm_whatsapp_numbers w
+                      where w.user_id = s.user_id
+                        and w.meta_phone_number_id = s.meta_phone_number_id)"
+else
+  UNIAO=""
+fi
+
+CTE="
+with caixas as (
+  select n.id::text as nid, n.user_id, coalesce(n.label,'(sem nome)')::text as label,
+         coalesce(n.meta_display_phone_number,'') as fone, coalesce(n.meta_phone_number_id,'') as pnid,
+         coalesce(n.meta_waba_id,'') as waba, coalesce(n.meta_access_token,'') as token,
+         n.is_active as ativo, n.created_at as quando
+  from public.crm_whatsapp_numbers n
+  $UNIAO
+)"
+
 FILTRO="(
-     n.meta_phone_number_id = '$ALVO'
-  or regexp_replace(coalesce(n.meta_display_phone_number,''), '[^0-9]', '', 'g') like '%${SOMENTE_DIGITOS}%'
+     c.pnid = '$ALVO'
+  or ( '$SUFIXO' <> '' and regexp_replace(c.fone, '[^0-9]', '', 'g') like '%${SUFIXO}' )
   or lower(coalesce($EMAIL_EXPR,'')) = lower('$ALVO')
 )"
-[ -z "$SOMENTE_DIGITOS" ] && FILTRO="(n.meta_phone_number_id = '$ALVO' or lower(coalesce($EMAIL_EXPR,'')) = lower('$ALVO'))"
 
 titulo "1) Cadastro do número"
 q "
-select coalesce($EMAIL_EXPR,'(sem email)')                 as cadastro,
-       coalesce(n.label,'(sem nome)')                      as caixa,
-       coalesce(n.meta_display_phone_number,'-')           as telefone,
-       coalesce(n.meta_phone_number_id,'!! VAZIO')         as phone_number_id,
-       coalesce(n.meta_waba_id,'!! VAZIO')                 as waba_id,
-       case when coalesce(n.meta_access_token,'')='' then '!! SEM TOKEN'
-            else 'token ok ('||length(n.meta_access_token)||' chars)' end as token,
-       n.is_active                                         as ativo,
-       n.id                                                as numero_id
-from public.crm_whatsapp_numbers n
-join auth.users u on u.id = n.user_id
-where $FILTRO
-order by n.created_at;
+$CTE
+select coalesce($EMAIL_EXPR,'(sem email)') as cadastro, c.label as caixa,
+       coalesce(nullif(c.fone,''),'-')     as telefone,
+       coalesce(nullif(c.pnid,''),'!! VAZIO') as phone_number_id,
+       coalesce(nullif(c.waba,''),'!! VAZIO') as waba_id,
+       case when c.token='' then '!! SEM TOKEN' else 'token ok ('||length(c.token)||' chars)' end as token,
+       c.ativo, coalesce(c.nid,'(legado)') as numero_id
+from caixas c join auth.users u on u.id = c.user_id
+where $FILTRO order by c.quando;
 "
 
 LINHAS="$(psql "$DB" -X -tA -F'|' -c "
-  select coalesce($EMAIL_EXPR,''), coalesce(n.label,''), coalesce(n.meta_phone_number_id,''),
-         coalesce(n.meta_waba_id,''), coalesce(n.meta_access_token,''), n.id
-  from public.crm_whatsapp_numbers n
-  join auth.users u on u.id = n.user_id
+  $CTE
+  select coalesce($EMAIL_EXPR,''), c.label, c.pnid, c.waba, c.token, coalesce(c.nid,'')
+  from caixas c join auth.users u on u.id = c.user_id
   where $FILTRO" 2>/dev/null)"
 
-[ -n "$LINHAS" ] || { c_err "Nenhum número encontrado para '$ALVO'. Confira o telefone/e-mail no CRM."; exit 1; }
+if [ -z "$LINHAS" ]; then
+  c_err "Nenhuma caixa casou com '$ALVO' (busquei por phone_number_id, e-mail e últimos 8 dígitos '$SUFIXO')."
+  titulo "Caixas cadastradas (para você escolher o alvo correto)"
+  q "
+  $CTE
+  select coalesce($EMAIL_EXPR,'(sem email)') as cadastro, c.label as caixa,
+         coalesce(nullif(c.fone,''),'-') as telefone, coalesce(nullif(c.pnid,''),'-') as phone_number_id, c.ativo
+  from caixas c join auth.users u on u.id = c.user_id
+  order by 1, c.quando;
+  "
+  exit 1
+fi
 
 while IFS='|' read -r email label pnid waba token nid; do
-  [ -z "${nid// }" ] && continue
+  [ -z "${pnid// }${nid// }" ] && continue
   titulo "2) Meta Cloud API — ${label:-sem nome} ($email)"
   if [ -z "${pnid// }" ] || [ -z "${token// }" ]; then
     c_err "  Credencial incompleta (phone_number_id ou token vazio) -> reconecte esta caixa no CRM."
@@ -124,11 +159,17 @@ while IFS='|' read -r email label pnid waba token nid; do
   fi
 
   titulo "4) Tráfego já registrado nesta caixa"
+  if [ -n "${nid// }" ]; then
+    ESCOPO="whatsapp_number_id = '$nid'"
+  else
+    c_warn "  caixa ainda LEGADA (só em crm_settings) -> dados sem whatsapp_number_id"
+    ESCOPO="whatsapp_number_id is null"
+  fi
   q "
-  select (select count(*) from public.crm_contacts c where c.whatsapp_number_id = '$nid')                          as contatos,
-         (select count(*) from public.crm_messages m where m.whatsapp_number_id = '$nid' and m.direction='inbound')  as recebidas,
-         (select count(*) from public.crm_messages m where m.whatsapp_number_id = '$nid' and m.direction='outbound') as enviadas,
-         (select max(m.created_at) from public.crm_messages m where m.whatsapp_number_id = '$nid')                   as ultima;
+  select (select count(*) from public.crm_contacts c where c.$ESCOPO)                          as contatos,
+         (select count(*) from public.crm_messages m where m.$ESCOPO and m.direction='inbound')  as recebidas,
+         (select count(*) from public.crm_messages m where m.$ESCOPO and m.direction='outbound') as enviadas,
+         (select max(m.created_at) from public.crm_messages m where m.$ESCOPO)                   as ultima;
   "
 done <<< "$LINHAS"
 
