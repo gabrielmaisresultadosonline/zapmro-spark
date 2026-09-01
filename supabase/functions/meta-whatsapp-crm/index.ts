@@ -1087,13 +1087,71 @@ async function saveOutboundEcho(
   }
 }
 
+/**
+ * Coexistência (SMB): a Meta entrega os mesmos eventos com OUTROS nomes de campo.
+ *   - field `smb_message_echoes`  -> value.smb_message_echoes  (enviadas pelo celular)
+ *   - field `history`             -> value.history[].threads[].messages (sync inicial)
+ *   - field `smb_app_state_sync`  -> apenas estado/contatos (nada a persistir aqui)
+ * Normalizamos para o formato canônico (`message_echoes` / `messages`) para que
+ * TODO o restante do handler continue funcionando sem duplicação de lógica.
+ */
+function normalizeSmbWebhookEntries(entries: any[]): any[] {
+  return entries.map((entryItem: any) => {
+    if (!Array.isArray(entryItem?.changes)) return entryItem;
+    const changes = entryItem.changes.map((change: any) => {
+      const field = String(change?.field || '');
+      const value = { ...(change?.value || {}) };
+
+      // 1) Echoes de coexistência
+      const smbEchoes = Array.isArray((value as any).smb_message_echoes)
+        ? (value as any).smb_message_echoes
+        : [];
+      if (smbEchoes.length > 0) {
+        value.message_echoes = [...(Array.isArray(value.message_echoes) ? value.message_echoes : []), ...smbEchoes];
+        delete (value as any).smb_message_echoes;
+        console.log('[WEBHOOK-SMB] Echoes de coexistência normalizados', { count: smbEchoes.length, field });
+      }
+
+      // 2) Histórico inicial (threads) -> messages
+      if (Array.isArray((value as any).history)) {
+        const historyMessages: any[] = [];
+        for (const bucket of (value as any).history) {
+          for (const thread of (Array.isArray(bucket?.threads) ? bucket.threads : [])) {
+            for (const msg of (Array.isArray(thread?.messages) ? thread.messages : [])) {
+              if (msg && typeof msg === 'object') historyMessages.push(msg);
+            }
+          }
+        }
+        if (historyMessages.length > 0) {
+          value.messages = [...(Array.isArray(value.messages) ? value.messages : []), ...historyMessages];
+          console.log('[WEBHOOK-SMB] Histórico normalizado', { count: historyMessages.length });
+        }
+        delete (value as any).history;
+      }
+
+      // 3) Estado do app: só log (não há mensagem para persistir)
+      if (/smb_app_state_sync/i.test(field)) {
+        console.log('[WEBHOOK-SMB] app_state_sync recebido', {
+          phone_number_id: value?.metadata?.phone_number_id || null,
+        });
+      }
+
+      const normalizedField = /smb_message_echoes/i.test(field) ? 'message_echoes' : change?.field;
+      return { ...change, field: normalizedField, value };
+    });
+    return { ...entryItem, changes };
+  });
+}
+
 async function handleProcessWebhook(supabase: any, entry: any, skipSave = false, userId?: string) {
-  const entries = Array.isArray(entry) ? entry : (entry ? [entry] : []);
+  const rawEntries = Array.isArray(entry) ? entry : (entry ? [entry] : []);
+  const entries = normalizeSmbWebhookEntries(rawEntries);
   const changes = entries.flatMap((entryItem: any) =>
     Array.isArray(entryItem?.changes)
       ? entryItem.changes.map((change: any) => ({ entryItem, change }))
       : []
   );
+
 
   const shouldSplitPayload = changes.length > 1 || changes.some(({ change }: any) => {
     const value = change?.value || {};
