@@ -1138,6 +1138,20 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
     return jsonResponse({ success: true, ignored: 'missing_user' });
   }
 
+  // Número (caixa) que recebeu esta mensagem. Cada número tem sua própria
+  // base de contatos/mensagens, então tudo abaixo é gravado com este escopo.
+  const inboundNumberRow = await getWhatsAppNumberByPhoneId(
+    supabase,
+    webhookPhoneNumberId,
+    webhookWabaId,
+  );
+  const inboundNumberId: string | null =
+    inboundNumberRow?.user_id === userId ? inboundNumberRow.id : null;
+  /** Restringe a consulta ao número da caixa quando ele é conhecido. */
+  const scopeNumber = <T,>(query: T): T =>
+    inboundNumberId ? ((query as any).eq('whatsapp_number_id', inboundNumberId) as T) : query;
+  const numberPatch = inboundNumberId ? { whatsapp_number_id: inboundNumberId } : {};
+
   if (Array.isArray(value.statuses) && value.statuses.length > 0) {
     const results = [];
     for (const statusEvent of value.statuses) {
@@ -1265,11 +1279,13 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
     // to fire the wrong flow when the customer's auto-reply arrived.
     const hasReferral = !!getReferralFromWebhookMessage(message);
     const variants = getBrazilianPhoneVariants(waId);
-    const { data: existingContactForCtwa } = await supabase
-      .from('crm_contacts')
-      .select('id, total_messages_received, last_message_received_at')
-      .in('wa_id', variants)
-      .eq('user_id', userId)
+    const { data: existingContactForCtwa } = await scopeNumber(
+      supabase
+        .from('crm_contacts')
+        .select('id, total_messages_received, last_message_received_at')
+        .in('wa_id', variants)
+        .eq('user_id', userId)
+    )
       .order('last_message_received_at', { ascending: false, nullsFirst: true })
       .limit(1)
       .maybeSingle();
@@ -1353,11 +1369,13 @@ else if (message.type === "unsupported") {
   }
 
    const variantsForSave = getBrazilianPhoneVariants(waId);
-   let { data: contactForSave } = await supabase
-     .from('crm_contacts')
-      .select('id, total_messages_received, last_message_received_at')
-     .in('wa_id', variantsForSave)
-     .eq('user_id', userId)
+   let { data: contactForSave } = await scopeNumber(
+     supabase
+       .from('crm_contacts')
+       .select('id, total_messages_received, last_message_received_at')
+       .in('wa_id', variantsForSave)
+       .eq('user_id', userId)
+   )
      .order('last_message_received_at', { ascending: false, nullsFirst: true })
      .limit(1)
      .maybeSingle();
@@ -1381,9 +1399,10 @@ else if (message.type === "unsupported") {
         last_interaction: new Date().toISOString(),
         last_message_received_at: new Date().toISOString(),
         total_messages_received: 0,
-        metadata: { source: 'meta_webhook', profile: message?.profile || null }
+        metadata: { source: 'meta_webhook', profile: message?.profile || null },
+        ...numberPatch
       }, { 
-        onConflict: 'wa_id,user_id',
+        onConflict: inboundNumberId ? 'wa_id,user_id,whatsapp_number_id' : 'wa_id,user_id',
         ignoreDuplicates: false 
       })
       .select('id, total_messages_received')
@@ -1391,11 +1410,13 @@ else if (message.type === "unsupported") {
 
     if (createContactError) {
       // Fallback manual se o upsert falhar por qualquer motivo (ex: restrição complexa)
-      const { data: retryContact } = await supabase
-        .from('crm_contacts')
-        .select('id, total_messages_received, last_message_received_at')
-        .in('wa_id', variantsForSave)
-        .eq('user_id', userId)
+      const { data: retryContact } = await scopeNumber(
+        supabase
+          .from('crm_contacts')
+          .select('id, total_messages_received, last_message_received_at')
+          .in('wa_id', variantsForSave)
+          .eq('user_id', userId)
+      )
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1)
         .maybeSingle();
