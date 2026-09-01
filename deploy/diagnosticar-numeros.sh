@@ -165,4 +165,3 @@ cat <<'FIM'
   * mensagens = 0 mas logs mostram POST  -> chegou e falhou na resolução: veja a linha de erro exibida no item 6.
   * mensagens_orfas > 0                  -> dados antigos sem número: rode ./deploy/atualizar.sh (SQL 088 faz o backfill).
 FIM
-FIM_MARCA=1
