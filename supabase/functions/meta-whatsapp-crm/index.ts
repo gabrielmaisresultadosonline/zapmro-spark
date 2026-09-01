@@ -880,64 +880,66 @@ ${aiPrompt}
       }).eq('id', contact.id);
       
     } else if (reply) {
-      // Use the settings resolved at the start of the function
-      const settings = aiSettings || await getCrmSettings(supabase, userId);
-      
-      if (settings) {
-        // MODIFICAÇÃO: Verifica se a resposta da IA é igual à última mensagem enviada para evitar duplicidade
-        const { data: lastOutbound } = await supabase
-          .from('crm_messages')
-          .select('content')
-          .eq('contact_id', contact.id)
-          .eq('direction', 'outbound')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+      // Credenciais já resolvidas no início (caixa correta + fallback validado).
+      const settings = aiSettings;
 
-        if (lastOutbound?.content === reply) {
-          console.log(`[AI-AGENT] Duplicated response detected for contact ${waId}. Skipping send.`);
-        } else {
-          console.log(`[AI-AGENT] Sending reply to ${waId}: ${reply.substring(0, 50)}...`);
-          
-          // Split reply into multiple messages if it contains double newlines or is too long, 
-          // to simulate human typing multiple messages. Limit to max 10 messages (user request: "5 10 partes").
-          const messageParts = reply.split(/\n\n+/).filter(p => p.trim()).slice(0, 10);
-          
-          for (const part of messageParts) {
+      // MODIFICAÇÃO: Verifica se a resposta da IA é igual à última mensagem enviada para evitar duplicidade
+      const { data: lastOutbound } = await supabase
+        .from('crm_messages')
+        .select('content')
+        .eq('contact_id', contact.id)
+        .eq('direction', 'outbound')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastOutbound?.content === reply) {
+        aiLog('skipped_duplicate_reply');
+        console.log(`[AI-AGENT] Duplicated response detected for contact ${waId}. Skipping send.`);
+      } else {
+        console.log(`[AI-AGENT] Sending reply to ${waId}: ${reply.substring(0, 50)}...`);
+
+        // Split reply into multiple messages if it contains double newlines or is too long,
+        // to simulate human typing multiple messages. Limit to max 10 messages.
+        const messageParts = reply.split(/\n\n+/).filter(p => p.trim()).slice(0, 10);
+
+        let sentParts = 0;
+        for (const part of messageParts) {
+          try {
             await handleInternalSendMessage(
-              supabase, 
-              settings.meta_phone_number_id, 
-              settings.meta_access_token, 
+              supabase,
+              settings.meta_phone_number_id,
+              settings.meta_access_token,
               {
                 to: waId,
                 text: part.trim(),
+                whatsapp_number_id: boxId,
                 metadata: { source_message_id: sourceMessageId, ai_run_id: aiRunId }
-              }, 
+              },
               contact,
-              settings.vps_transcoder_url
+              settings.vps_transcoder_url,
+              userId || contact.user_id
             );
-            // Small delay between messages to feel more human
-            if (messageParts.length > 1) {
-              await new Promise(resolve => setTimeout(resolve, 1500));
-            }
+            sentParts++;
+          } catch (sendErr: any) {
+            // Falha de envio precisa aparecer no log — antes o throw subia e o
+            // erro real da Meta ficava escondido em "Error processing AI response".
+            aiLog('send_failed', {
+              part_index: sentParts,
+              phone_number_id: settings.meta_phone_number_id,
+              error: sendErr?.message || String(sendErr),
+            });
+            console.error(`[AI-AGENT] Falha ao enviar resposta para ${waId}:`, sendErr?.message || sendErr);
+            return { success: false, error: sendErr?.message || 'send_failed', sent_parts: sentParts };
+          }
+          // Small delay between messages to feel more human
+          if (messageParts.length > 1) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
           }
         }
-      } else {
-        console.warn(`[AI-AGENT] Settings not available for user ${userId || contact.user_id}. Attempting to resolve for ${waId}.`);
-        const { data: retrySettings } = await supabase.from('crm_settings').select('meta_phone_number_id, meta_access_token, vps_transcoder_url').eq('user_id', userId || contact.user_id).maybeSingle();
-        if (retrySettings?.meta_phone_number_id && retrySettings?.meta_access_token) {
-           await handleInternalSendMessage(
-            supabase, 
-            retrySettings.meta_phone_number_id, 
-            retrySettings.meta_access_token, 
-            { to: waId, text: reply }, 
-            contact,
-            retrySettings.vps_transcoder_url
-          );
-        } else {
-          console.error(`[AI-AGENT] Could not resolve settings to send reply to ${waId}`);
-        }
+        aiLog('reply_sent', { parts: sentParts, phone_number_id: settings.meta_phone_number_id });
       }
+      
       
       console.log(`[AI-AGENT] Updating contact ${waId} to ensure continued AI interaction.`);
       await supabase.from('crm_contacts').update({ 
