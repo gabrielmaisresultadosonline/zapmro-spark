@@ -1245,7 +1245,15 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
         results.push({ ignored: 'edited_echo', id: echo?.id || null });
         continue;
       }
-      results.push(await saveOutboundEcho(supabase, userId, echo, businessPhone));
+      results.push(await saveOutboundEcho(
+        supabase,
+        userId,
+        echo,
+        businessPhone,
+        inboundNumberId,
+        inboundNumberRow?.user_id === userId ? (inboundNumberRow?.meta_access_token || null) : null,
+      ));
+
     }
 
     if (allEchoes.length === (value.messages?.length || 0) || echoes.length > 0) {
