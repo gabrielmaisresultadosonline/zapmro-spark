@@ -628,7 +628,7 @@ const Broadcaster = ({ templates, flows, contacts, statuses }: BroadcasterProps)
       
       try {
         // Send actual message
-        const payload: any = { action: 'sendMessage', to: number, broadcastId };
+        const payload: any = { action: 'sendMessage', to: number, broadcastId, ...activeNumberPatch() };
         if (type === 'message') payload.text = messageText;
         else if (type === 'template') {
           const t = templates.find(temp => temp.id === selectedTemplate);
