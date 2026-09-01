@@ -2407,6 +2407,46 @@ const CRM = () => {
   };
 
 
+  /**
+   * Checa a chave da OpenAI no servidor (a Meta/OpenAI não permite validar
+   * direto do navegador com segurança). Retorna se pode prosseguir com o save.
+   */
+  const validateOpenAiKey = async (
+    apiKey: string,
+    opts: { silent?: boolean } = {}
+  ): Promise<{ valid: boolean; message: string; detail?: string }> => {
+    setOpenAiKeyCheck({ state: 'checking' });
+    try {
+      const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
+        body: { action: 'validateOpenAiKey', api_key: apiKey },
+      });
+      if (error) throw error;
+
+      const valid = data?.valid === true;
+      const message = String(data?.message || (valid ? 'API correta.' : 'API ERRADA.'));
+      const detail = data?.provider_message ? String(data.provider_message) : undefined;
+
+      setOpenAiKeyCheck({ state: valid ? 'valid' : 'invalid', message, detail });
+
+      if (!opts.silent) {
+        toast({
+          title: valid ? 'API correta ✅' : 'API ERRADA ❌',
+          description: detail ? `${message} (${detail})` : message,
+          variant: valid ? 'default' : 'destructive',
+        });
+      }
+      return { valid, message, detail };
+    } catch (err: any) {
+      const message =
+        'Não foi possível validar a chave agora. Verifique a conexão e tente novamente.';
+      setOpenAiKeyCheck({ state: 'invalid', message, detail: err?.message });
+      if (!opts.silent) {
+        toast({ title: 'Falha ao validar a API', description: message, variant: 'destructive' });
+      }
+      return { valid: false, message, detail: err?.message };
+    }
+  };
+
    const handleSaveSettings = async (customSettings?: any) => {
      setSaving(true);
      try {
