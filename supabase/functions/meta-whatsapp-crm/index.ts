@@ -2634,7 +2634,7 @@ async function markGoogleAccountReconnectRequired(
   errorMessage: string,
 ) {
   try {
-    await supabase.from('crm_google_accounts').update({
+    const { error } = await supabase.from('crm_google_accounts').update({
       connection_status: 'reconnect_required',
       auto_sync: false,
       last_sync_error_code: errorCode,
@@ -2642,9 +2642,19 @@ async function markGoogleAccountReconnectRequired(
       last_sync_error_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }).eq('id', accountId);
+    if (error) {
+      // Instalação sem a migração 092: as colunas de saúde ainda não existem.
+      // Ainda assim precisamos parar o loop de 403 — desligamos só o auto_sync.
+      console.warn('[GOOGLE-SYNC] Update de saúde falhou, aplicando fallback:', error.message);
+      await supabase.from('crm_google_accounts').update({
+        auto_sync: false,
+        updated_at: new Date().toISOString(),
+      }).eq('id', accountId);
+    }
   } catch (e) {
     console.warn('[GOOGLE-SYNC] Não foi possível marcar reconexão necessária:', (e as any)?.message);
   }
+
 }
 
 
