@@ -3743,11 +3743,16 @@ async function handleInternalSendMessage(supabase: any, phoneNumberId: string, a
     
     // IMPORTANTE: Garantir que o userId esteja presente para aparecer na tela do usuário correto
     const finalUserId = userId || contact.user_id || null;
+    // A mensagem precisa carregar a caixa (número) da conversa: todas as telas
+    // escopadas por número filtram por whatsapp_number_id.
+    const outboundNumberId = params.whatsapp_number_id || contact.whatsapp_number_id || null;
 
     const { data: savedMessage, error: insertError } = await supabase.from('crm_messages').insert({
       contact_id: contact.id,
       user_id: finalUserId,
+      ...(outboundNumberId ? { whatsapp_number_id: outboundNumberId } : {}),
       direction: 'outbound',
+
       message_type: messageType,
       content: content,
       media_url: media?.url || null,
