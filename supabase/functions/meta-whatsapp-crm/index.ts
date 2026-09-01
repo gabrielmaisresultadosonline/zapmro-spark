@@ -2658,63 +2658,129 @@ async function markGoogleAccountReconnectRequired(
 }
 
 
+/**
+ * Traduz o erro cru da Cloud API em um código estável + mensagem acionável.
+ *
+ * Importante: NÃO tratamos mais os códigos genéricos 10/100 como "saldo",
+ * porque eles quase sempre são PERMISSÃO (app sem `whatsapp_business_messaging`,
+ * número fora do portfólio/WABA do token, template não pertencente à WABA).
+ * Isso levava contas com cartão válido a receber "saldo insuficiente".
+ * O único código realmente financeiro da Meta é 131042 (e mensagens que citem
+ * explicitamente payment/billing/balance/funding).
+ */
 function normalizeMetaSendError(result: any, fallback = 'Erro ao enviar mensagem pela Meta') {
   const metaError = result?.error || {};
   const rawMessage = String(metaError?.error_user_msg || metaError?.message || fallback);
-  const rawCode = metaError?.code;
+  const rawCode = Number(metaError?.code);
   const rawSubcode = Number(metaError?.error_subcode);
   const rawType = String(metaError?.type || '');
-  const lower = rawMessage.toLowerCase();
+  const errorData = metaError?.error_data?.details || metaError?.error_data?.messaging_product || '';
+  const userTitle = metaError?.error_user_title || '';
+  const fbtrace = metaError?.fbtrace_id || '';
+  const lower = `${rawMessage} ${userTitle} ${errorData}`.toLowerCase();
 
-  if (Number(rawCode) === 133010 || lower.includes('account not registered')) {
-    return {
-      code: 'WHATSAPP_DISCONNECTED',
-      message: 'Você precisa reconectar seu WhatsApp.',
-      details: rawMessage,
-    };
+  // Detalhe técnico completo — é isso que aparece em "Logs de falha" no CRM.
+  const details = [
+    rawMessage,
+    userTitle ? `título: ${userTitle}` : '',
+    errorData ? `details: ${errorData}` : '',
+    Number.isFinite(rawCode) ? `code: ${rawCode}` : '',
+    Number.isFinite(rawSubcode) ? `subcode: ${rawSubcode}` : '',
+    rawType ? `type: ${rawType}` : '',
+    fbtrace ? `fbtrace_id: ${fbtrace}` : '',
+  ].filter(Boolean).join(' | ');
+
+  const build = (code: string, message: string) => ({ code, message, details });
+
+  if (rawCode === 133010 || lower.includes('account not registered')) {
+    return build('WHATSAPP_DISCONNECTED', 'Você precisa reconectar seu WhatsApp.');
   }
 
   // Token expirado / app bloqueado / número não acessível por esse token.
-  // Ex.: code 100, subcode 33, GraphMethodException ("Object with ID ... does not exist,
-  // cannot be loaded due to missing permissions") ou "API access blocked".
   const isTokenOrAppBlocked =
     rawSubcode === 33 ||
     rawType === 'GraphMethodException' ||
     lower.includes('api access blocked') ||
     lower.includes('session has expired') ||
     lower.includes('access token') ||
-    (Number(rawCode) === 190);
+    rawCode === 190;
 
   if (isTokenOrAppBlocked) {
-    return {
-      code: 'META_TOKEN_INVALID',
-      message: '⚠️ A conexão com a Meta expirou ou o acesso do app foi bloqueado. Vá em Configurações → Conectar com Facebook e refaça a conexão do número do WhatsApp.',
-      details: rawMessage,
-    };
+    return build(
+      'META_TOKEN_INVALID',
+      '⚠️ A conexão com a Meta expirou ou o app perdeu acesso a este número. Vá em Configurações → Conectar com Facebook e refaça a conexão.',
+    );
   }
 
-  const paymentErrorCodes = [10, 100, 131031, 131042, 131045, 131047, 135000];
-  const isPaymentIssue = paymentErrorCodes.includes(Number(rawCode)) ||
+  // ---- Financeiro REAL ----
+  const isBilling =
+    rawCode === 131042 ||
     lower.includes('payment') ||
+    lower.includes('billing') ||
     lower.includes('balance') ||
-    lower.includes('credit') ||
-    lower.includes('missing permissions') ||
-    lower.includes('does not exist');
+    lower.includes('funding') ||
+    lower.includes('credit line') ||
+    lower.includes('forma de pagamento') ||
+    lower.includes('saldo');
 
-  if (isPaymentIssue) {
-    return {
-      code: 'META_PAYMENT_OR_PERMISSION_ERROR',
-      message: '⚠️ SALDO INSUFICIENTE NA META: Não foi possível enviar. Por favor, adicione saldo ou um cartão na Central de Pagamentos Meta em Ajustes -> Saldo e Pagamentos.',
-      details: rawMessage,
-    };
+  if (isBilling) {
+    return build(
+      'META_BILLING_ERROR',
+      '⚠️ A Meta recusou o envio por questão de pagamento nesta WABA (cartão recusado, limite de gastos atingido ou WABA sem método de pagamento vinculado). Confira em Gerenciador de Negócios → Central de Pagamentos se o cartão está ATIVO e vinculado exatamente a esta conta do WhatsApp.',
+    );
   }
 
-  return {
-    code: rawCode ? `META_${rawCode}` : 'META_SEND_ERROR',
-    message: rawMessage,
-    details: rawMessage,
-  };
+  // ---- Permissão / escopo (códigos 10, 200-299, 3) ----
+  if (rawCode === 10 || rawCode === 3 || (rawCode >= 200 && rawCode <= 299) || lower.includes('missing permissions') || lower.includes('permission')) {
+    return build(
+      'META_PERMISSION_DENIED',
+      '⚠️ Falta permissão no app da Meta (não é saldo). Normalmente: o token não tem `whatsapp_business_messaging`, o número/WABA não está no portfólio deste app, ou o template não pertence a esta WABA. Refaça a conexão pelo Facebook concedendo todas as permissões.',
+    );
+  }
+
+  // ID inexistente para este token (número/template/WABA de outra conta)
+  if (rawCode === 100 || lower.includes('does not exist') || lower.includes('unsupported get request')) {
+    return build(
+      'META_OBJECT_NOT_FOUND',
+      '⚠️ A Meta não encontrou o número, template ou WABA usando este token (não é saldo). Verifique se o Phone Number ID e o template pertencem à MESMA conta conectada.',
+    );
+  }
+
+  if (rawCode === 131031) {
+    return build('META_ACCOUNT_RESTRICTED', '⚠️ Esta conta do WhatsApp Business está restrita/bloqueada pela Meta. Abra o Gerenciador de Negócios e verifique as restrições da WABA.');
+  }
+
+  if (rawCode === 131045) {
+    return build('META_NUMBER_NOT_REGISTERED', '⚠️ O número não concluiu o registro na Cloud API. Reconecte o WhatsApp para refazer o registro.');
+  }
+
+  if (rawCode === 131047 || rawCode === 131051 || rawCode === 470) {
+    return build('META_24H_WINDOW', 'Janela de 24h expirada: envie um template aprovado para reabrir a conversa.');
+  }
+
+  if (rawCode === 131049 || rawCode === 130472) {
+    return build('META_QUALITY_LIMIT', 'A Meta limitou a entrega desta mensagem por qualidade/engajamento. Reduza o volume e melhore o conteúdo do template.');
+  }
+
+  if (rawCode === 131026) {
+    return build('META_UNDELIVERABLE', 'Mensagem não entregue: o destinatário provavelmente não tem WhatsApp ativo ou não aceita mensagens de empresas.');
+  }
+
+  if (rawCode === 132000 || rawCode === 132001 || rawCode === 132005 || rawCode === 132007 || rawCode === 132012 || rawCode === 132015 || rawCode === 132016 || rawCode === 132068 || rawCode === 132069) {
+    return build('META_TEMPLATE_ERROR', 'Problema com o template: nome/idioma inexistente, pausado, reprovado ou variáveis em quantidade diferente da aprovada.');
+  }
+
+  if (rawCode === 130429 || rawCode === 131048 || rawCode === 4) {
+    return build('META_RATE_LIMIT', 'Limite de envio (rate limit) atingido. Aumente o intervalo entre mensagens e tente novamente mais tarde.');
+  }
+
+  if (rawCode === 135000) {
+    return build('META_GENERIC_PARAM_ERROR', 'A Meta rejeitou os parâmetros da mensagem. Confira o payload/variáveis do template.');
+  }
+
+  return build(Number.isFinite(rawCode) ? `META_${rawCode}` : 'META_SEND_ERROR', rawMessage);
 }
+
 
 function getGoogleOAuthCredentials(settings?: any) {
   const envClientId = Deno.env.get('GOOGLE_CLIENT_ID')?.trim();
