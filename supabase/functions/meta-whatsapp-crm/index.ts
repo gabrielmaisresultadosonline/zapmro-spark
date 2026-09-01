@@ -1956,7 +1956,7 @@ else if (message.type === "unsupported") {
       is_ai_node: isInAiNode,
     });
     console.log(`[FLOW-LOG] WEBHOOK: Processing AI Agent for ${waId}. State: ${contact.flow_state}`);
-    const result = await processAiAgentResponse(supabase, contact, waId, text || extractedInboundText, message.id, userId);
+    const result = await processAiAgentResponse(supabase, contact, waId, text || extractedInboundText, message.id, userId, inboundNumberId);
     return jsonResponse(result);
   }
 
@@ -2141,7 +2141,7 @@ else if (message.type === "unsupported") {
             
             // Re-fetch e processa agora
             const { data: updatedContact } = await supabase.from('crm_contacts').select('*').eq('id', contact.id).single();
-            const result = await processAiAgentResponse(supabase, updatedContact, waId, text || extractedInboundText, message.id, userId);
+            const result = await processAiAgentResponse(supabase, updatedContact, waId, text || extractedInboundText, message.id, userId, inboundNumberId);
             return jsonResponse(result);
           }
         }
@@ -2186,7 +2186,7 @@ else if (message.type === "unsupported") {
     // Passamos o texto extraído para garantir que a IA tenha o input correto.
     console.log(`[WEBHOOK-AI-DEBUG] Calling processAiAgentResponse for ${waId} with messageId: ${message.id}`);
     webhookAiLog('dispatch_global_fallback', { inbound_text_length: inboundText?.length || 0 });
-    const result = await processAiAgentResponse(supabase, contact, waId, inboundText, message.id, userId);
+    const result = await processAiAgentResponse(supabase, contact, waId, inboundText, message.id, userId, inboundNumberId);
     return jsonResponse(result);
   } else if (contact) {
     webhookAiLog('skipped_not_eligible', { has_active_flow: hasActiveFlow });
@@ -5166,7 +5166,7 @@ async function fetchAndStoreIncomingMedia(
                  if (updatedContact) {
                      // Adicionamos um pequeno delay para garantir que a mensagem de abertura foi entregue antes da IA responder
                      await new Promise(r => setTimeout(r, 2000));
-                     await processAiAgentResponse(supabase, updatedContact, contact.wa_id, undefined, undefined, contact.user_id);
+                     await processAiAgentResponse(supabase, updatedContact, contact.wa_id, undefined, undefined, contact.user_id, contact.whatsapp_number_id || null);
                  }
               }
             } else {
@@ -5981,7 +5981,7 @@ async function fetchAndStoreIncomingMedia(
              }).eq('id', contactId);
           } else {
              // Dispara a IA mesmo sem texto do cliente para que ela se apresente
-             await processAiAgentResponse(supabase, contactAfterExec, waId, params.text || "Inicie o atendimento se apresentando.", params.sourceMessageId, contactAfterExec.user_id || userId);
+             await processAiAgentResponse(supabase, contactAfterExec, waId, params.text || "Inicie o atendimento se apresentando.", params.sourceMessageId, contactAfterExec.user_id || userId, contactAfterExec.whatsapp_number_id || params.whatsapp_number_id || null);
           }
         }
 
@@ -6206,7 +6206,7 @@ async function fetchAndStoreIncomingMedia(
 
                 // Delay para parecer mais natural
                 await new Promise(resolve => setTimeout(resolve, 3000));
-                await processAiAgentResponse(supabase, updatedContact, waId, finalAiText, sourceMessageId, updatedContact.user_id);
+                await processAiAgentResponse(supabase, updatedContact, waId, finalAiText, sourceMessageId, updatedContact.user_id, updatedContact.whatsapp_number_id || null);
               }
             })();
           } else if (res?.message?.includes('AI handling state') && !text) {
@@ -6538,7 +6538,7 @@ async function fetchAndStoreIncomingMedia(
         
       if (!contact) return jsonResponse({ success: false, error: 'Contact not found' });
       
-       const result = await processAiAgentResponse(supabase, contact, params.to || params.waId, params.text, params.sourceMessageId, contact.user_id);
+       const result = await processAiAgentResponse(supabase, contact, params.to || params.waId, params.text, params.sourceMessageId, contact.user_id, contact.whatsapp_number_id || params.whatsapp_number_id || null);
       return jsonResponse(result);
     }
 
