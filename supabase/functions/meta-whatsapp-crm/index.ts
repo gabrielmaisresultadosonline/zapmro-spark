@@ -4280,6 +4280,35 @@ async function fetchAndStoreIncomingMedia(
         settings = userSettings;
       }
       
+      // ---- Escopo por número de WhatsApp -------------------------------
+      // O app envia `whatsapp_number_id` (número aberto na tela). Em execuções
+      // internas (fluxos/agendamentos) herdamos o número do próprio contato.
+      let scopedNumberId: string | null = params.whatsapp_number_id || null;
+      if (!scopedNumberId && params.contactId) {
+        const { data: contactNumber } = await supabase
+          .from('crm_contacts')
+          .select('whatsapp_number_id')
+          .eq('id', params.contactId)
+          .maybeSingle();
+        if (contactNumber?.whatsapp_number_id) scopedNumberId = contactNumber.whatsapp_number_id;
+      }
+      if (scopedNumberId) {
+        const numberRow = await getWhatsAppNumberById(supabase, scopedNumberId);
+        if (numberRow && (!userId || numberRow.user_id === userId)) {
+          if (!userId) userId = numberRow.user_id;
+          if (!settings) settings = await getCrmSettings(supabase, userId);
+          settings = applyNumberToSettings(settings, numberRow);
+          console.log('[NUMBER] Credenciais aplicadas do número aberto', {
+            number_id: scopedNumberId,
+            phone_number_id: numberRow.meta_phone_number_id,
+          });
+        } else {
+          // Número inexistente ou de outro cadastro: nunca reaproveitamos.
+          console.warn('[NUMBER] whatsapp_number_id ignorado (não pertence ao usuário)', scopedNumberId);
+          scopedNumberId = null;
+        }
+      }
+
       // Se ainda não temos settings mas temos um contactId, tentamos buscar pelo user_id do contato
       if (!settings && trustedInternalRequest && params.contactId) {
         const { data: contactForId } = await supabase.from('crm_contacts').select('user_id').eq('id', params.contactId).maybeSingle();
@@ -4373,7 +4402,25 @@ async function fetchAndStoreIncomingMedia(
         const value = body?.entry?.[0]?.changes?.[0]?.value || {};
         const webhookPhoneNumberId = value?.metadata?.phone_number_id;
         const webhookWabaId = body?.entry?.[0]?.id;
-        if (webhookPhoneNumberId || webhookWabaId) {
+        // Primeiro tentamos o número exato que recebeu a mensagem: com dois
+        // números no mesmo cadastro, `crm_settings` guarda só um deles e a
+        // conversa do outro acabava sem dono (ou misturada).
+        const inboundNumber = await getWhatsAppNumberByPhoneId(
+          supabase,
+          webhookPhoneNumberId,
+          webhookWabaId,
+        );
+        if (inboundNumber?.user_id) {
+          userId = inboundNumber.user_id;
+          const baseSettings = await getCrmSettings(supabase, userId);
+          userSettings = applyNumberToSettings(baseSettings, inboundNumber) || baseSettings;
+          console.log('[WEBHOOK] Número de entrada resolvido', {
+            user_id: userId,
+            number_id: inboundNumber.id,
+            phone_number_id: inboundNumber.meta_phone_number_id,
+          });
+        }
+        if (!userSettings && (webhookPhoneNumberId || webhookWabaId)) {
           const settingsQuery = supabase
             .from('crm_settings')
             .select('*')
