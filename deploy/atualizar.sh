@@ -138,6 +138,13 @@ done
 vazios=$(grep -cE '^[A-Z0-9_]+=$' "$STACK/secrets.env" || true)
 ok ".env pronto  |  secrets.env com ${vazios:-0} chave(s) ainda em branco (pode preencher depois)"
 
+# aviso nominal: sem estas chaves o WhatsApp (webhook/assinaturas) nao funciona
+faltando=""
+for k in FACEBOOK_APP_ID FACEBOOK_APP_SECRET META_WEBHOOK_VERIFY_TOKEN; do
+  grep -qE "^${k}=.+" "$STACK/secrets.env" || faltando="$faltando $k"
+done
+[ -z "$faltando" ] || printf '\033[33m  ATENCAO: chaves do WhatsApp em branco em secrets.env:%s\033[0m\n' "$faltando"
+
 # ------------------------------------------------------------- 4) subir stack -
 sec "4/9 Subindo a stack PostgreSQL"
 cd "$STACK"

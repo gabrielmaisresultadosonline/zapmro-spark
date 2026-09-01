@@ -88,7 +88,7 @@ LINHAS="$(psql "$DB" -X -tA -F'|' -P pager=off -c "
 
 titulo "1) Campos assinados hoje no app Meta"
 if [ -z "$APP_ID" ] || [ -z "$APP_SECRET" ]; then
-  c_err "  FACEBOOK_APP_ID / FACEBOOK_APP_SECRET ausentes no .env — não é possível reassinar os campos do app."
+  c_err "  FACEBOOK_APP_ID / FACEBOOK_APP_SECRET ausentes — preencha em deploy/postgres-stack/secrets.env e rode de novo."
 else
   curl -s -m 25 "$API/${APP_ID}/subscriptions?access_token=${APP_ID}|${APP_SECRET}" \
     | jq -r '.data[]? | "objeto=\(.object) campos=\([.fields[]?.name] | join(","))\ncallback=\(.callback_url // "-")"' \
@@ -97,7 +97,7 @@ fi
 
 titulo "2) Reassinando o app com os campos de coexistência"
 if [ -z "$APP_ID" ] || [ -z "$APP_SECRET" ] || [ -z "$BASE_URL" ]; then
-  c_err "  faltam FACEBOOK_APP_ID / FACEBOOK_APP_SECRET / PUBLIC_API_URL no .env — pulando."
+  c_err "  faltam FACEBOOK_APP_ID / FACEBOOK_APP_SECRET (secrets.env) ou PUBLIC_API_URL/SITE_URL (.env) — pulando."
 else
   CALLBACK="${BASE_URL%/}/functions/v1/meta-whatsapp-crm"
   echo "  callback: $CALLBACK"
