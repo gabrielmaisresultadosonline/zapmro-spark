@@ -22,7 +22,6 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { supabase } from "@/integrations/supabase/client";
-import { resolveMediaUrl } from "@/lib/mediaUrl";
 import { FlowMedia } from "./FlowMedia";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
@@ -2006,7 +2005,14 @@ const FlowEditorInner: React.FC<FlowEditorProps> = ({ flow, onSave, onClose }) =
                       </div>
                     </div>
                     {card.mediaUrl && (
-                      <div className="text-[10px] text-emerald-700 truncate">✓ {card.fileName || card.mediaUrl}</div>
+                      <div className="flex items-center gap-2">
+                        <FlowMedia
+                          kind={card.mediaType === 'video' ? 'video' : 'image'}
+                          url={card.mediaUrl}
+                          className="w-16 h-12 rounded border"
+                        />
+                        <div className="text-[10px] text-emerald-700 truncate">✓ {card.fileName || card.mediaUrl}</div>
+                      </div>
                     )}
                     <div className="space-y-1">
                       <Label className="text-[11px]">Texto do card (opcional)</Label>

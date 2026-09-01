@@ -1,5 +1,6 @@
 import React from 'react';
 import { Check, CheckCheck, Link as LinkIcon, Copy, QrCode } from 'lucide-react';
+import { FlowMedia } from './FlowMedia';
 
 interface Props {
   nodeType: string;
@@ -113,11 +114,11 @@ function renderMessage(nodeType: string, data: any) {
       <Bubble>
         {hasMedia && (
           <div className="p-1">
-            {data.videoUrl ? (
-              <video src={data.videoUrl} className="w-full rounded-md aspect-video object-cover" muted />
-            ) : (
-              <img src={data.imageUrl} className="w-full rounded-md aspect-video object-cover" alt="preview" />
-            )}
+            <FlowMedia
+              kind={data.videoUrl ? 'video' : 'image'}
+              url={data.videoUrl || data.imageUrl}
+              className="w-full rounded-md aspect-video"
+            />
           </div>
         )}
         <div className="px-2.5 pt-1.5 whitespace-pre-wrap break-words">
@@ -189,11 +190,11 @@ function renderMessage(nodeType: string, data: any) {
           {cards.map((card, i) => (
             <div key={card.id || i} className="min-w-[180px] max-w-[180px] bg-white rounded-lg shadow-sm snap-center overflow-hidden">
               {card.mediaUrl ? (
-                card.mediaType === 'video' ? (
-                  <video src={card.mediaUrl} className="w-full aspect-video object-cover" muted />
-                ) : (
-                  <img src={card.mediaUrl} className="w-full aspect-video object-cover" alt={`card-${i}`} />
-                )
+                <FlowMedia
+                  kind={card.mediaType === 'video' ? 'video' : 'image'}
+                  url={card.mediaUrl}
+                  className="w-full aspect-video"
+                />
               ) : (
                 <div className="w-full aspect-video bg-slate-200 flex items-center justify-center text-[9px] text-slate-500">
                   Sem mídia
