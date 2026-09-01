@@ -2859,6 +2859,57 @@ async function autoPushGoogleContactsForAllUsers(supabase: any) {
   }
 }
 
+/**
+ * Multi-WhatsApp: cada número do cadastro (crm_whatsapp_numbers) tem
+ * credenciais próprias e sua própria base de contatos/mensagens
+ * (coluna whatsapp_number_id). Estes helpers garantem que o envio sempre
+ * saia pelo número da conversa — enviar pelo número errado é o que gerava
+ * o erro "Re-engagement message" da Meta.
+ */
+async function getWhatsAppNumberById(supabase: any, numberId?: string | null) {
+  if (!numberId) return null;
+  const { data, error } = await supabase
+    .from('crm_whatsapp_numbers')
+    .select('*')
+    .eq('id', numberId)
+    .maybeSingle();
+  if (error) console.warn('[NUMBER] lookup by id failed', error.message);
+  return data || null;
+}
+
+async function getWhatsAppNumberByPhoneId(
+  supabase: any,
+  phoneNumberId?: string | null,
+  wabaId?: string | null,
+) {
+  if (!phoneNumberId && !wabaId) return null;
+  let query = supabase.from('crm_whatsapp_numbers').select('*').limit(1);
+  query = phoneNumberId
+    ? query.eq('meta_phone_number_id', phoneNumberId)
+    : query.eq('meta_waba_id', wabaId);
+  const { data, error } = await query;
+  if (error) console.warn('[NUMBER] lookup by phone failed', error.message);
+  const row = Array.isArray(data) ? data[0] : null;
+  return row || null;
+}
+
+/** Sobrepõe as credenciais de `crm_settings` com as do número informado. */
+function applyNumberToSettings(settings: any, numberRow: any) {
+  if (!numberRow?.meta_access_token || !numberRow?.meta_phone_number_id) return settings;
+  return {
+    ...(settings || {}),
+    meta_access_token: numberRow.meta_access_token,
+    meta_phone_number_id: numberRow.meta_phone_number_id,
+    meta_waba_id: numberRow.meta_waba_id ?? settings?.meta_waba_id ?? null,
+    meta_business_id: numberRow.meta_business_id ?? settings?.meta_business_id ?? null,
+    meta_app_id: numberRow.meta_app_id ?? settings?.meta_app_id ?? null,
+    meta_app_secret: numberRow.meta_app_secret ?? settings?.meta_app_secret ?? null,
+    meta_display_phone_number:
+      numberRow.meta_display_phone_number ?? settings?.meta_display_phone_number ?? null,
+    meta_verified_name: numberRow.meta_verified_name ?? settings?.meta_verified_name ?? null,
+  };
+}
+
 async function getCrmSettings(supabase: any, userId?: string | null) {
   if (userId) {
     const { data, error } = await supabase
