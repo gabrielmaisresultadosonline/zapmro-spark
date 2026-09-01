@@ -321,7 +321,11 @@ sleep 5
 # -------------------------------------------------------------- 6) functions --
 sec "6/9 Edge Functions (Deno, rodando na sua VPS)"
 qtd=$(find "$ROOT/supabase/functions" -maxdepth 1 -mindepth 1 -type d ! -name '_shared' | wc -l)
-( cd "$STACK" && docker compose up -d functions && docker compose restart functions >/dev/null )
+# IMPORTANTE: `restart` reaproveita workers/cache do Deno e o container pode
+# continuar executando o código ANTIGO das funções. `--force-recreate` garante
+# que o novo index.ts entre em vigor. Volumes do Postgres/Auth não são tocados.
+( cd "$STACK" && docker compose up -d --force-recreate functions >/dev/null )
+
 ok "${qtd} funções recarregadas em ${PUBLIC_API_URL:-http://localhost:${GATEWAY_PORT:-8000}}/functions/v1/<nome>"
 
 # --------------------------------------------------------------- 7) frontend --
