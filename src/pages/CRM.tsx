@@ -4936,7 +4936,17 @@ const CRM = () => {
     lastContactsSyncRef.current = null;
     setActiveNumberId(null);
   };
-  if (!loading && multiNumberEnabled && currentUserId && !activeNumberId) {
+  // Se o cadastro já tem números salvos, NUNCA forçamos o Embedded Signup:
+  // mostramos o seletor para o usuário escolher um número existente (ou
+  // conectar outro, se quiser). Isso cobre o caso de desconectar um número
+  // estando em um cadastro com dois números.
+  const hasSavedNumbers = userNumbersCount > 0;
+  if (
+    !loading &&
+    multiNumberEnabled &&
+    currentUserId &&
+    (!activeNumberId || (!isWhatsAppConnected && hasSavedNumbers))
+  ) {
     return (
       <WhatsAppNumberSelector
         userId={currentUserId}
@@ -4952,6 +4962,19 @@ const CRM = () => {
           contactsSeededRef.current = false;
           lastContactsSyncRef.current = null;
           setActiveNumberId(record.id);
+          // Reflete de imediato as credenciais do número escolhido para o gate
+          // de conexão não voltar a aparecer enquanto o reload não terminar.
+          setMetaSettings((prev: any) => ({
+            ...prev,
+            meta_access_token: record.meta_access_token || '',
+            meta_phone_number_id: record.meta_phone_number_id || '',
+            meta_waba_id: record.meta_waba_id || '',
+            meta_display_phone_number: record.meta_display_phone_number || '',
+            meta_verified_name: record.meta_verified_name || '',
+          }));
+          setWhatsAppConnectionConfirmed(
+            !!(record.meta_access_token && record.meta_phone_number_id && record.meta_waba_id)
+          );
           void fetchData(true);
         }}
         onConnectNew={startEmbeddedSignup}
