@@ -42,6 +42,40 @@ command -v psql >/dev/null || { c_err "psql não instalado: sudo apt-get install
 [ -n "$(q1 'select 1')" ] || { c_err "Não consegui conectar no banco (container zapmro-db está de pé?)"; exit 1; }
 
 # ---------------------------------------------------------------------------
+# Onde está o e-mail neste banco? Instalações diferentes guardam em lugares
+# diferentes (coluna auth.users.email, metadados, ou nem existe). Detectamos
+# em runtime para nunca abortar os blocos seguintes com "column does not exist".
+EMAIL_EXPR="null::text"
+if [ "$(q1 "select count(*) from information_schema.columns where table_schema='auth' and table_name='users' and column_name='email'")" = "1" ]; then
+  EMAIL_EXPR="p.email"
+elif [ "$(q1 "select count(*) from information_schema.columns where table_schema='auth' and table_name='users' and column_name='raw_user_meta_data'")" = "1" ]; then
+  EMAIL_EXPR="(p.raw_user_meta_data->>'email')"
+  c_warn "  auth.users.email não existe; usando raw_user_meta_data->>'email'"
+else
+  c_warn "  Não há coluna de e-mail em auth.users; o filtro por e-mail será ignorado."
+fi
+
+titulo "0) Versão que está rodando de verdade"
+GIT_COMMIT="$(git -C "$RAIZ" rev-parse --short HEAD 2>/dev/null || echo '?')"
+echo "  commit do repositório: $GIT_COMMIT"
+FN_HOST="$RAIZ/supabase/functions/meta-whatsapp-crm/index.ts"
+if [ -f "$FN_HOST" ]; then
+  echo "  hash no host:      $(sha256sum "$FN_HOST" | cut -c1-16)"
+fi
+if docker ps --format '{{.Names}}' | grep -q '^zapmro-functions$'; then
+  HASH_CONTAINER="$(docker exec zapmro-functions sha256sum /home/deno/functions/meta-whatsapp-crm/index.ts 2>/dev/null | cut -c1-16)"
+  echo "  hash no container: ${HASH_CONTAINER:-nao consegui ler}"
+  echo "  container iniciado em: $(docker inspect -f '{{.State.StartedAt}}' zapmro-functions 2>/dev/null)"
+  if [ -f "$FN_HOST" ] && [ -n "${HASH_CONTAINER:-}" ]; then
+    if [ "$(sha256sum "$FN_HOST" | cut -c1-16)" = "$HASH_CONTAINER" ]; then
+      c_ok "  OK  container está com o MESMO código do repositório"
+    else
+      c_err "  DIVERGENTE  o container roda código antigo -> docker compose -f deploy/postgres-stack/docker-compose.yml up -d --force-recreate functions"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
 titulo "1) Migração de isolamento por número (088)"
 for t in crm_contacts crm_messages; do
   tem="$(q1 "select count(*) from information_schema.columns where table_schema='public' and table_name='$t' and column_name='whatsapp_number_id'")"
@@ -49,14 +83,22 @@ for t in crm_contacts crm_messages; do
   else c_err "  FALTA  $t.whatsapp_number_id -> rode ./deploy/atualizar.sh para aplicar o SQL 088"; fi
 done
 
+IDX_OK="$(q1 "select count(*) from pg_indexes where schemaname='public' and indexname='crm_contacts_wa_user_number_uidx'")"
+if [ "${IDX_OK:-0}" = "1" ]; then
+  c_ok "  OK  índice único não-parcial (089) presente — upsert de contato funciona"
+else
+  c_err "  FALTA  índice crm_contacts_wa_user_number_uidx (SQL 089) -> mensagens recebidas falham com erro de ON CONFLICT"
+fi
+
 # ---------------------------------------------------------------------------
 titulo "2) Números cadastrados e credenciais"
 FILTRO_SQL="true"
-[ -n "$FILTRO_EMAIL" ] && FILTRO_SQL="lower(p.email) = lower('$FILTRO_EMAIL')"
+[ -n "$FILTRO_EMAIL" ] && FILTRO_SQL="lower(coalesce($EMAIL_EXPR,'')) = lower('$FILTRO_EMAIL')"
+
 
 q "
 select
-  p.email                                                as cadastro,
+  ${EMAIL_EXPR}                                                as cadastro,
   coalesce(n.label,'(sem nome)')                         as numero,
   coalesce(n.meta_display_phone_number,'-')              as telefone,
   coalesce(n.meta_phone_number_id,'!! VAZIO')            as phone_number_id,
@@ -68,14 +110,14 @@ select
 from public.crm_whatsapp_numbers n
 join auth.users p on p.id = n.user_id
 where $FILTRO_SQL
-order by p.email, n.created_at;
+order by ${EMAIL_EXPR}, n.created_at;
 "
 
 # ---------------------------------------------------------------------------
 titulo "3) Volume por número (quem está zerado)"
 q "
 select
-  p.email                                       as cadastro,
+  ${EMAIL_EXPR}                                       as cadastro,
   coalesce(n.label, n.meta_display_phone_number,'(sem nome)') as numero,
   (select count(*) from public.crm_contacts c
      where c.whatsapp_number_id = n.id)         as contatos,
@@ -90,13 +132,13 @@ select
 from public.crm_whatsapp_numbers n
 join auth.users p on p.id = n.user_id
 where $FILTRO_SQL
-order by p.email, mensagens desc;
+order by ${EMAIL_EXPR}, mensagens desc;
 "
 
 titulo "4) Registros órfãos (sem número atribuído = dado antigo)"
 q "
 select
-  p.email as cadastro,
+  ${EMAIL_EXPR} as cadastro,
   (select count(*) from public.crm_contacts c
      where c.user_id = p.id and c.whatsapp_number_id is null) as contatos_orfaos,
   (select count(*) from public.crm_messages m
@@ -134,7 +176,7 @@ if ! command -v jq >/dev/null; then c_warn "  jq não instalado (sudo apt-get in
       c_warn "     meta_waba_id vazio: não consigo checar o webhook (preencha no CRM)."
     fi
   done < <(psql "$DB" -X -tA -F'|' -c "
-      select p.email, coalesce(n.label,''), coalesce(n.meta_phone_number_id,''),
+      select ${EMAIL_EXPR}, coalesce(n.label,''), coalesce(n.meta_phone_number_id,''),
              coalesce(n.meta_waba_id,''), coalesce(n.meta_access_token,'')
       from public.crm_whatsapp_numbers n
       join auth.users p on p.id = n.user_id
@@ -142,18 +184,27 @@ if ! command -v jq >/dev/null; then c_warn "  jq não instalado (sudo apt-get in
 fi
 
 # ---------------------------------------------------------------------------
-titulo "6) Logs recentes das Edge Functions (webhook recebido?)"
+titulo "6) Logs das Edge Functions (separando ANTES e DEPOIS do deploy)"
 if docker ps --format '{{.Names}}' | grep -q '^zapmro-functions$'; then
-  echo "  últimas linhas com 'webhook' / 'phone_number_id' / 'error':"
-  docker logs --since 6h zapmro-functions 2>&1 \
-    | grep -iE 'webhook|phone_number_id|whatsapp_number|re-engagement|error' \
-    | tail -60 || c_warn "  nenhuma linha relevante nas últimas 6h"
+  INICIO_CONTAINER="$(docker inspect -f '{{.State.StartedAt}}' zapmro-functions 2>/dev/null)"
+  echo "  container iniciado em: ${INICIO_CONTAINER:-desconhecido}"
   echo
-  c_warn "  Para acompanhar ao vivo (mande uma mensagem para o número parado enquanto observa):"
-  echo   "     docker logs -f --since 1m zapmro-functions | grep -iE 'webhook|phone_number_id|error'"
+  c_warn "  --- LOGS ANTIGOS (antes deste container subir; erros aqui NÃO valem mais) ---"
+  docker logs --until "${INICIO_CONTAINER:-1h}" zapmro-functions 2>&1 \
+    | grep -iE 'webhook|phone_number_id|ON CONFLICT|error' | tail -15 \
+    || echo "  (sem logs antigos)"
+  echo
+  c_ok "  --- LOGS DA VERSÃO ATUAL (é isso que importa) ---"
+  docker logs --since "${INICIO_CONTAINER:-10m}" zapmro-functions 2>&1 \
+    | grep -iE 'webhook|phone_number_id|whatsapp_number|ON CONFLICT|re-engagement|error' \
+    | tail -60 || c_warn "  nenhuma linha relevante desde o start"
+  echo
+  c_warn "  Teste ao vivo (mande uma mensagem para o número parado enquanto observa):"
+  echo   "     docker logs -f --since 1m zapmro-functions | grep -iE 'webhook|phone_number_id|ON CONFLICT|error'"
 else
   c_warn "  container zapmro-functions não está rodando: docker compose -f deploy/postgres-stack/docker-compose.yml up -d functions"
 fi
+
 
 titulo "Como ler o resultado"
 cat <<'FIM'

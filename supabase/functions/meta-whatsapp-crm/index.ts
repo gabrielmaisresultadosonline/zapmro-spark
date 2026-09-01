@@ -907,7 +907,20 @@ ${aiPrompt}
 
 // Save a message echo (sent from the WhatsApp Business mobile app/desktop) as
 // an outbound message in the CRM so both sides of the conversation stay in sync.
-async function saveOutboundEcho(supabase: any, userId: string, echo: any, businessPhone: string) {
+async function saveOutboundEcho(
+  supabase: any,
+  userId: string,
+  echo: any,
+  businessPhone: string,
+  /** Caixa (número) que enviou este eco. Mantém o histórico separado por número. */
+  whatsappNumberId: string | null = null,
+  /** Token do próprio número, usado para baixar mídia sem depender do número principal. */
+  numberAccessToken: string | null = null,
+) {
+  const echoScope = <T,>(query: T): T =>
+    whatsappNumberId ? ((query as any).eq('whatsapp_number_id', whatsappNumberId) as T) : query;
+  const echoNumberPatch = whatsappNumberId ? { whatsapp_number_id: whatsappNumberId } : {};
+
   try {
     const metaMessageId = echo?.id;
     // The recipient (customer) — Meta puts the customer in `to` for echoes.
@@ -940,12 +953,13 @@ async function saveOutboundEcho(supabase: any, userId: string, echo: any, busine
     // Find or create contact
     // Busca por TODAS as variantes (com/sem 9º dígito) para nunca duplicar a conversa.
     const echoVariants = getBrazilianPhoneVariants(waId);
-    const { data: echoContactRows } = await supabase
-      .from('crm_contacts')
-      .select('id')
-      .in('wa_id', echoVariants)
-      .eq('user_id', userId)
-      .limit(1);
+    const { data: echoContactRows } = await echoScope(
+      supabase
+        .from('crm_contacts')
+        .select('id')
+        .in('wa_id', echoVariants)
+        .eq('user_id', userId)
+    ).limit(1);
     let contact: any = echoContactRows && echoContactRows.length > 0 ? echoContactRows[0] : null;
 
     if (!contact) {
@@ -958,28 +972,35 @@ async function saveOutboundEcho(supabase: any, userId: string, echo: any, busine
           source_type: 'whatsapp_echo',
           user_id: userId,
           last_interaction: new Date().toISOString(),
-          metadata: { source: 'meta_webhook_echo' }
+          metadata: { source: 'meta_webhook_echo' },
+          ...echoNumberPatch
         })
         .select('id')
         .maybeSingle();
-      if (createErr) {
+      if (createErr || !created) {
         // Corrida: outro processo criou o contato primeiro — reaproveita o existente.
-        const { data: retryRows } = await supabase
-          .from('crm_contacts')
-          .select('id')
-          .in('wa_id', echoVariants)
-          .eq('user_id', userId)
-          .limit(1);
+        const { data: retryRows } = await echoScope(
+          supabase
+            .from('crm_contacts')
+            .select('id')
+            .in('wa_id', echoVariants)
+            .eq('user_id', userId)
+        ).limit(1);
         if (retryRows && retryRows.length > 0) {
           contact = retryRows[0];
         } else {
-          console.error('[WEBHOOK-ECHO] Failed to create contact', { waId, error: createErr.message });
-          return { success: false, error: createErr.message };
+          console.error('[WEBHOOK-ECHO] Failed to create contact', {
+            waId,
+            whatsapp_number_id: whatsappNumberId,
+            error: createErr?.message || 'insert returned no row',
+          });
+          return { success: false, error: createErr?.message || 'contact_create_failed' };
         }
       } else {
         contact = created;
       }
     }
+
 
     // Build content/type
     const type = echo?.type || 'text';
@@ -995,12 +1016,17 @@ async function saveOutboundEcho(supabase: any, userId: string, echo: any, busine
       const mediaId = node?.id;
       if (mediaId) {
         try {
-          const { data: echoSettings } = await supabase
-            .from('crm_settings')
-            .select('meta_access_token')
-            .eq('user_id', userId)
-            .maybeSingle();
-          const token = echoSettings?.meta_access_token;
+          // Prioriza o token da própria caixa; crm_settings é só compatibilidade
+          // para cadastros antigos de um único número.
+          let token = numberAccessToken;
+          if (!token) {
+            const { data: echoSettings } = await supabase
+              .from('crm_settings')
+              .select('meta_access_token')
+              .eq('user_id', userId)
+              .maybeSingle();
+            token = echoSettings?.meta_access_token || null;
+          }
           if (token) {
             echoMediaUrl = await fetchAndStoreIncomingMedia(
               supabase,
@@ -1029,6 +1055,8 @@ async function saveOutboundEcho(supabase: any, userId: string, echo: any, busine
       media_url: echoMediaUrl,
       metadata: { raw: echo, source: 'echo_mobile_app' },
       user_id: userId,
+      ...echoNumberPatch,
+
       // Preserve the real send order from the WhatsApp client (phone/desktop).
       // Webhook events can arrive out-of-order; rely on Meta's timestamp so the
       // chat renders in the same order the user actually sent the messages.
@@ -1157,12 +1185,35 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
     return jsonResponse({ success: true, ignored: 'missing_user' });
   }
 
-  const inboundNumberId: string | null =
+  // Caixa efetiva do evento. Quando o phone_number_id do payload não casa com
+  // nenhuma linha de crm_whatsapp_numbers (cadastro antigo, número recém trocado
+  // na Meta), caímos no número padrão do usuário — é exatamente o que o trigger
+  // do banco faria, e assim o app e o banco nunca divergem no ON CONFLICT.
+  let inboundNumberId: string | null =
     inboundNumberRow?.user_id === userId ? inboundNumberRow.id : null;
+  if (!inboundNumberId) {
+    const { data: fallbackNumbers } = await supabase
+      .from('crm_whatsapp_numbers')
+      .select('id, is_primary, created_at')
+      .eq('user_id', userId)
+      .order('is_primary', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: true })
+      .limit(1);
+    const fallbackNumber = Array.isArray(fallbackNumbers) ? fallbackNumbers[0] : null;
+    if (fallbackNumber?.id) {
+      inboundNumberId = fallbackNumber.id;
+      console.warn('[WEBHOOK] phone_number_id não encontrado; usando número padrão do cadastro', {
+        phone_number_id: webhookPhoneNumberId,
+        waba_id: webhookWabaId,
+        whatsapp_number_id: inboundNumberId,
+      });
+    }
+  }
   /** Restringe a consulta ao número da caixa quando ele é conhecido. */
   const scopeNumber = <T,>(query: T): T =>
     inboundNumberId ? ((query as any).eq('whatsapp_number_id', inboundNumberId) as T) : query;
   const numberPatch = inboundNumberId ? { whatsapp_number_id: inboundNumberId } : {};
+
 
   if (Array.isArray(value.statuses) && value.statuses.length > 0) {
     const results = [];
@@ -1194,7 +1245,15 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
         results.push({ ignored: 'edited_echo', id: echo?.id || null });
         continue;
       }
-      results.push(await saveOutboundEcho(supabase, userId, echo, businessPhone));
+      results.push(await saveOutboundEcho(
+        supabase,
+        userId,
+        echo,
+        businessPhone,
+        inboundNumberId,
+        inboundNumberRow?.user_id === userId ? (inboundNumberRow?.meta_access_token || null) : null,
+      ));
+
     }
 
     if (allEchoes.length === (value.messages?.length || 0) || echoes.length > 0) {
@@ -1394,13 +1453,17 @@ else if (message.type === "unsupported") {
 
   if (!contactForSave && !skipSave) {
     const profileName = message?.profile?.name || message?.contacts?.[0]?.profile?.name || waId;
-    
-    // ATENÇÃO: Prevenção de duplicidade de contatos.
-    // O webhook pode chegar em rajadas. Tentamos inserir, se falhar por conflito
-    // buscamos novamente o contato existente para garantir que usamos o ID correto.
+
+    // ATENÇÃO: NÃO usar .upsert() aqui.
+    // Os índices únicos de crm_contacts são PARCIAIS
+    // (WHERE whatsapp_number_id IS NOT NULL / IS NULL). O PostgREST envia
+    // "ON CONFLICT (cols)" sem o predicado, e o Postgres não infere índice
+    // parcial nesse caso -> erro "no unique or exclusion constraint matching
+    // the ON CONFLICT specification", que fazia TODA mensagem recebida falhar.
+    // Padrão seguro: insert direto e, em caso de corrida/duplicidade, releitura.
     const { data: newContact, error: createContactError } = await supabase
       .from('crm_contacts')
-      .upsert({
+      .insert({
         // Sempre gravamos a forma canônica para nunca criar duas conversas
         // do mesmo contato (com e sem o 9º dígito).
         wa_id: canonicalBrazilianWaId(waId),
@@ -1413,15 +1476,12 @@ else if (message.type === "unsupported") {
         total_messages_received: 0,
         metadata: { source: 'meta_webhook', profile: message?.profile || null },
         ...numberPatch
-      }, { 
-        onConflict: inboundNumberId ? 'wa_id,user_id,whatsapp_number_id' : 'wa_id,user_id',
-        ignoreDuplicates: false 
       })
       .select('id, total_messages_received')
       .maybeSingle();
 
-    if (createContactError) {
-      // Fallback manual se o upsert falhar por qualquer motivo (ex: restrição complexa)
+    if (createContactError || !newContact) {
+      // Corrida entre entregas simultâneas da Meta: o contato já existe.
       const { data: retryContact } = await scopeNumber(
         supabase
           .from('crm_contacts')
@@ -1432,19 +1492,30 @@ else if (message.type === "unsupported") {
         .order('last_message_received_at', { ascending: false, nullsFirst: true })
         .limit(1)
         .maybeSingle();
-      
+
       if (retryContact) {
         contactForSave = retryContact;
         console.log('[WEBHOOK] Contact duplicate resolved via retry', { waId, contact_id: contactForSave.id });
       } else {
-        console.error('[WEBHOOK] Failed to resolve contact creation', { waId, userId, error: createContactError.message });
-        return jsonResponse({ success: false, error: createContactError.message }, 500);
+        console.error('[WEBHOOK] Failed to resolve contact creation', {
+          waId,
+          userId,
+          whatsapp_number_id: inboundNumberId,
+          error: createContactError?.message || 'insert returned no row',
+        });
+        return jsonResponse({ success: false, error: createContactError?.message || 'contact_create_failed' }, 500);
       }
     } else {
       contactForSave = newContact;
-      console.log('[WEBHOOK] Handled inbound contact (upsert)', { waId, userId, contact_id: contactForSave?.id });
+      console.log('[WEBHOOK] Handled inbound contact (insert)', {
+        waId,
+        userId,
+        whatsapp_number_id: inboundNumberId,
+        contact_id: contactForSave?.id,
+      });
     }
   }
+
 
   if (contactForSave && !skipSave) {
     // Capture state BEFORE update so we can evaluate triggers (first message, day, 24h)
@@ -1485,14 +1556,21 @@ else if (message.type === "unsupported") {
   }
 
 
+    // IMPORTANTE: este `contact` alimenta IA, gatilhos e fluxos abaixo.
+    // Sem o escopo por número, um cadastro com 2 caixas usava o contato da
+    // OUTRA caixa (a de last_message_received_at mais recente) — misturando
+    // histórico e travando o envio. O escopo abaixo é obrigatório.
     const variants = getBrazilianPhoneVariants(waId);
-    const { data: contact } = await supabase
-      .from('crm_contacts')
-      .select('*')
-      .in('wa_id', variants)
-      .eq('user_id', userId)
+    let { data: contact } = await scopeNumber(
+      supabase
+        .from('crm_contacts')
+        .select('*')
+        .in('wa_id', variants)
+        .eq('user_id', userId)
+    )
       .order('last_message_received_at', { ascending: false, nullsFirst: true })
       .limit(1)
+
       .maybeSingle();
 
   // CRITICAL: Ensure we capture messages for AI processing if the contact is in any AI-related state
@@ -2916,10 +2994,19 @@ async function getWhatsAppNumberByPhoneId(
   wabaId?: string | null,
 ) {
   if (!phoneNumberId && !wabaId) return null;
-  let query = supabase.from('crm_whatsapp_numbers').select('*').limit(1);
+  // Ordenação determinística: se o mesmo phone_number_id estiver cadastrado
+  // duas vezes (erro de configuração), sempre resolvemos para o número ativo
+  // mais recente, em vez de uma linha arbitrária do banco.
+  let query = supabase
+    .from('crm_whatsapp_numbers')
+    .select('*')
+    .order('is_active', { ascending: false, nullsFirst: false })
+    .order('updated_at', { ascending: false, nullsFirst: false })
+    .limit(1);
   query = phoneNumberId
     ? query.eq('meta_phone_number_id', phoneNumberId)
     : query.eq('meta_waba_id', wabaId);
+
   const { data, error } = await query;
   if (error) console.warn('[NUMBER] lookup by phone failed', error.message);
   const row = Array.isArray(data) ? data[0] : null;
