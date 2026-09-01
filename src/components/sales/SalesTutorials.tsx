@@ -148,6 +148,8 @@ export default function SalesTutorials({ variant = "light" }: SalesTutorialsProp
                 videos={g.videos}
                 isDark={isDark}
                 onPlay={(v) => {
+                  // Garante que o início do arquivo já esteja a caminho antes do modal montar.
+                  prefetchVideo(resolveMediaUrl(v.video_url));
                   setVideoLoading(true);
                   setActive(v);
                 }}
