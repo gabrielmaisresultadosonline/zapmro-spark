@@ -2372,7 +2372,7 @@ const CRM = () => {
       // Busca todas as contas Google conectadas (até 3)
       const { data: googleAccs } = await supabase
         .from('crm_google_accounts')
-        .select('id, email, auto_sync')
+        .select('id, email, auto_sync, connection_status, last_sync_error')
         .eq('user_id', user.id)
         .order('created_at', { ascending: true });
       if (googleAccs) {
