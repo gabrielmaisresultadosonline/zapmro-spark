@@ -111,8 +111,9 @@ export default function FirstTutorialVideo({
               controls
               autoPlay
               playsInline
-              preload="metadata"
+              preload="auto"
               controlsList="nodownload"
+              onLoadedMetadata={() => setVideoLoading(false)}
               onLoadedData={() => setVideoLoading(false)}
               onCanPlay={() => setVideoLoading(false)}
               onWaiting={() => setVideoLoading(true)}
