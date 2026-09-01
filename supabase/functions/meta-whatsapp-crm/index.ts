@@ -493,30 +493,77 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
   }
 }
 
- async function processAiAgentResponse(supabase: any, contact: any, waId: string, text?: string, sourceMessageId?: string, userId?: string) {
-  const aiRunId = crypto.randomUUID().slice(0, 8);
-  const aiLog = (stage: string, details: Record<string, unknown> = {}) => {
-    console.log('[AI-AUTO]', JSON.stringify({
-      run_id: aiRunId,
-      stage,
-      wa_id: waId,
-      contact_id: contact?.id || null,
-      user_id: userId || contact?.user_id || null,
-      source_message_id: sourceMessageId || null,
-      ...details,
-    }));
-  };
-  aiLog('processing_started', {
-    ai_active: contact?.ai_active === true,
-    flow_state: contact?.flow_state || null,
-    has_input_text: Boolean(text),
-  });
-  let messageText = text;
+  async function processAiAgentResponse(
+   supabase: any,
+   contact: any,
+   waId: string,
+   text?: string,
+   sourceMessageId?: string,
+   userId?: string,
+   /**
+    * Caixa (número de WhatsApp) que deve responder. Sem isto o agente usava
+    * sempre as credenciais de `crm_settings` (número principal): em cadastros
+    * com 2+ números a resposta saía pelo número errado — ou nem saía, porque
+    * `crm_settings` não guarda credencial dos números secundários. Era a causa
+    * de "IA ativada mas não responde nada".
+    */
+   whatsappNumberId?: string | null,
+ ) {
+   const aiRunId = crypto.randomUUID().slice(0, 8);
+   const aiLog = (stage: string, details: Record<string, unknown> = {}) => {
+     console.log('[AI-AUTO]', JSON.stringify({
+       run_id: aiRunId,
+       stage,
+       wa_id: waId,
+       contact_id: contact?.id || null,
+       user_id: userId || contact?.user_id || null,
+       source_message_id: sourceMessageId || null,
+       whatsapp_number_id: whatsappNumberId || contact?.whatsapp_number_id || null,
+       ...details,
+     }));
+   };
+   aiLog('processing_started', {
+     ai_active: contact?.ai_active === true,
+     flow_state: contact?.flow_state || null,
+     has_input_text: Boolean(text),
+   });
+   let messageText = text;
 
-    const { data: aiSettings, error: settingsError } = await supabase.from('crm_settings').select('openai_api_key, meta_phone_number_id, meta_access_token, vps_transcoder_url, ai_agent_enabled, business_description, ai_system_prompt').eq('user_id', userId).maybeSingle();
+    const { data: baseSettings, error: settingsError } = await supabase.from('crm_settings').select('openai_api_key, meta_phone_number_id, meta_access_token, vps_transcoder_url, ai_agent_enabled, business_description, ai_system_prompt').eq('user_id', userId).maybeSingle();
   
   if (settingsError) {
     console.error(`[AI-AGENT] Error fetching settings for user ${userId}:`, settingsError);
+  }
+
+  // Credenciais da caixa correta. `crm_whatsapp_numbers` é a fonte de verdade
+  // por número; `crm_settings` fica só como compatibilidade (cadastro antigo).
+  const boxId = whatsappNumberId || contact?.whatsapp_number_id || null;
+  let aiSettings: any = baseSettings;
+  if (boxId) {
+    const { data: boxRow, error: boxErr } = await supabase
+      .from('crm_whatsapp_numbers')
+      .select('id, meta_phone_number_id, meta_access_token, meta_waba_id, meta_display_phone_number, is_active')
+      .eq('id', boxId)
+      .maybeSingle();
+    if (boxErr) console.error('[AI-AGENT] Falha ao carregar credenciais da caixa', boxId, boxErr.message);
+    if (boxRow?.meta_phone_number_id && boxRow?.meta_access_token) {
+      aiSettings = applyNumberToSettings(baseSettings, boxRow);
+      aiLog('credentials_resolved', {
+        source: 'crm_whatsapp_numbers',
+        phone_number_id: boxRow.meta_phone_number_id,
+        display: boxRow.meta_display_phone_number || null,
+      });
+    } else {
+      aiLog('credentials_fallback_settings', {
+        reason: boxRow ? 'box_without_credentials' : 'box_not_found',
+        has_settings_credentials: Boolean(baseSettings?.meta_phone_number_id && baseSettings?.meta_access_token),
+      });
+    }
+  } else {
+    aiLog('credentials_fallback_settings', {
+      reason: 'no_box_id',
+      has_settings_credentials: Boolean(baseSettings?.meta_phone_number_id && baseSettings?.meta_access_token),
+    });
   }
 
   const manualAiActivation = contact?.metadata?.manual_ai_activation === true;
@@ -527,6 +574,18 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
     });
     console.log(`[AI-AGENT] Ignorado para ${waId}: ativação geral desligada e conversa sem ativação manual.`);
     return { success: true, skipped: 'ai_not_enabled_for_contact' };
+  }
+
+  if (!aiSettings?.meta_phone_number_id || !aiSettings?.meta_access_token) {
+    // Sem credencial não há como responder. Antes isto virava um throw genérico
+    // ("Credenciais Meta não configuradas") no fim da função e ficava invisível.
+    aiLog('failed_missing_meta_credentials', {
+      box_id: boxId,
+      has_phone_number_id: Boolean(aiSettings?.meta_phone_number_id),
+      has_access_token: Boolean(aiSettings?.meta_access_token),
+    });
+    console.error(`[AI-AGENT] Sem credenciais Meta para responder ${waId} (caixa ${boxId || 'não resolvida'}).`);
+    return { success: false, error: 'meta_credentials_missing', whatsapp_number_id: boxId };
   }
 
   const OPENAI_API_KEY = aiSettings?.openai_api_key || Deno.env.get('OPENAI_API_KEY');
@@ -764,22 +823,28 @@ ${aiPrompt}
       
       // If there's a message to send before transferring, send it
       if (cleanReply) {
-        const settings = aiSettings || await getCrmSettings(supabase, userId);
+        const settings = aiSettings;
         if (settings) {
           const messageParts = cleanReply.split(/\n\n+/).filter(p => p.trim()).slice(0, 3);
           for (const part of messageParts) {
-            await handleInternalSendMessage(
-              supabase, 
-              settings.meta_phone_number_id, 
-              settings.meta_access_token, 
-              { 
-                to: waId, 
-                text: part.trim(),
-                metadata: { source_message_id: sourceMessageId }
-              }, 
-              contact,
-              settings.vps_transcoder_url
-            );
+            try {
+              await handleInternalSendMessage(
+                supabase,
+                settings.meta_phone_number_id,
+                settings.meta_access_token,
+                {
+                  to: waId,
+                  text: part.trim(),
+                  whatsapp_number_id: boxId,
+                  metadata: { source_message_id: sourceMessageId }
+                },
+                contact,
+                settings.vps_transcoder_url,
+                userId || contact.user_id
+              );
+            } catch (transferSendErr: any) {
+              aiLog('transfer_send_failed', { error: transferSendErr?.message || String(transferSendErr) });
+            }
             if (messageParts.length > 1) await wait(1500);
           }
         }
@@ -821,64 +886,66 @@ ${aiPrompt}
       }).eq('id', contact.id);
       
     } else if (reply) {
-      // Use the settings resolved at the start of the function
-      const settings = aiSettings || await getCrmSettings(supabase, userId);
-      
-      if (settings) {
-        // MODIFICAÇÃO: Verifica se a resposta da IA é igual à última mensagem enviada para evitar duplicidade
-        const { data: lastOutbound } = await supabase
-          .from('crm_messages')
-          .select('content')
-          .eq('contact_id', contact.id)
-          .eq('direction', 'outbound')
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+      // Credenciais já resolvidas no início (caixa correta + fallback validado).
+      const settings = aiSettings;
 
-        if (lastOutbound?.content === reply) {
-          console.log(`[AI-AGENT] Duplicated response detected for contact ${waId}. Skipping send.`);
-        } else {
-          console.log(`[AI-AGENT] Sending reply to ${waId}: ${reply.substring(0, 50)}...`);
-          
-          // Split reply into multiple messages if it contains double newlines or is too long, 
-          // to simulate human typing multiple messages. Limit to max 10 messages (user request: "5 10 partes").
-          const messageParts = reply.split(/\n\n+/).filter(p => p.trim()).slice(0, 10);
-          
-          for (const part of messageParts) {
+      // MODIFICAÇÃO: Verifica se a resposta da IA é igual à última mensagem enviada para evitar duplicidade
+      const { data: lastOutbound } = await supabase
+        .from('crm_messages')
+        .select('content')
+        .eq('contact_id', contact.id)
+        .eq('direction', 'outbound')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (lastOutbound?.content === reply) {
+        aiLog('skipped_duplicate_reply');
+        console.log(`[AI-AGENT] Duplicated response detected for contact ${waId}. Skipping send.`);
+      } else {
+        console.log(`[AI-AGENT] Sending reply to ${waId}: ${reply.substring(0, 50)}...`);
+
+        // Split reply into multiple messages if it contains double newlines or is too long,
+        // to simulate human typing multiple messages. Limit to max 10 messages.
+        const messageParts = reply.split(/\n\n+/).filter(p => p.trim()).slice(0, 10);
+
+        let sentParts = 0;
+        for (const part of messageParts) {
+          try {
             await handleInternalSendMessage(
-              supabase, 
-              settings.meta_phone_number_id, 
-              settings.meta_access_token, 
+              supabase,
+              settings.meta_phone_number_id,
+              settings.meta_access_token,
               {
                 to: waId,
                 text: part.trim(),
+                whatsapp_number_id: boxId,
                 metadata: { source_message_id: sourceMessageId, ai_run_id: aiRunId }
-              }, 
+              },
               contact,
-              settings.vps_transcoder_url
+              settings.vps_transcoder_url,
+              userId || contact.user_id
             );
-            // Small delay between messages to feel more human
-            if (messageParts.length > 1) {
-              await new Promise(resolve => setTimeout(resolve, 1500));
-            }
+            sentParts++;
+          } catch (sendErr: any) {
+            // Falha de envio precisa aparecer no log — antes o throw subia e o
+            // erro real da Meta ficava escondido em "Error processing AI response".
+            aiLog('send_failed', {
+              part_index: sentParts,
+              phone_number_id: settings.meta_phone_number_id,
+              error: sendErr?.message || String(sendErr),
+            });
+            console.error(`[AI-AGENT] Falha ao enviar resposta para ${waId}:`, sendErr?.message || sendErr);
+            return { success: false, error: sendErr?.message || 'send_failed', sent_parts: sentParts };
+          }
+          // Small delay between messages to feel more human
+          if (messageParts.length > 1) {
+            await new Promise(resolve => setTimeout(resolve, 1500));
           }
         }
-      } else {
-        console.warn(`[AI-AGENT] Settings not available for user ${userId || contact.user_id}. Attempting to resolve for ${waId}.`);
-        const { data: retrySettings } = await supabase.from('crm_settings').select('meta_phone_number_id, meta_access_token, vps_transcoder_url').eq('user_id', userId || contact.user_id).maybeSingle();
-        if (retrySettings?.meta_phone_number_id && retrySettings?.meta_access_token) {
-           await handleInternalSendMessage(
-            supabase, 
-            retrySettings.meta_phone_number_id, 
-            retrySettings.meta_access_token, 
-            { to: waId, text: reply }, 
-            contact,
-            retrySettings.vps_transcoder_url
-          );
-        } else {
-          console.error(`[AI-AGENT] Could not resolve settings to send reply to ${waId}`);
-        }
+        aiLog('reply_sent', { parts: sentParts, phone_number_id: settings.meta_phone_number_id });
       }
+      
       
       console.log(`[AI-AGENT] Updating contact ${waId} to ensure continued AI interaction.`);
       await supabase.from('crm_contacts').update({ 
@@ -1889,7 +1956,7 @@ else if (message.type === "unsupported") {
       is_ai_node: isInAiNode,
     });
     console.log(`[FLOW-LOG] WEBHOOK: Processing AI Agent for ${waId}. State: ${contact.flow_state}`);
-    const result = await processAiAgentResponse(supabase, contact, waId, text || extractedInboundText, message.id, userId);
+    const result = await processAiAgentResponse(supabase, contact, waId, text || extractedInboundText, message.id, userId, inboundNumberId);
     return jsonResponse(result);
   }
 
@@ -2074,7 +2141,7 @@ else if (message.type === "unsupported") {
             
             // Re-fetch e processa agora
             const { data: updatedContact } = await supabase.from('crm_contacts').select('*').eq('id', contact.id).single();
-            const result = await processAiAgentResponse(supabase, updatedContact, waId, text || extractedInboundText, message.id, userId);
+            const result = await processAiAgentResponse(supabase, updatedContact, waId, text || extractedInboundText, message.id, userId, inboundNumberId);
             return jsonResponse(result);
           }
         }
@@ -2119,7 +2186,7 @@ else if (message.type === "unsupported") {
     // Passamos o texto extraído para garantir que a IA tenha o input correto.
     console.log(`[WEBHOOK-AI-DEBUG] Calling processAiAgentResponse for ${waId} with messageId: ${message.id}`);
     webhookAiLog('dispatch_global_fallback', { inbound_text_length: inboundText?.length || 0 });
-    const result = await processAiAgentResponse(supabase, contact, waId, inboundText, message.id, userId);
+    const result = await processAiAgentResponse(supabase, contact, waId, inboundText, message.id, userId, inboundNumberId);
     return jsonResponse(result);
   } else if (contact) {
     webhookAiLog('skipped_not_eligible', { has_active_flow: hasActiveFlow });
@@ -5099,7 +5166,7 @@ async function fetchAndStoreIncomingMedia(
                  if (updatedContact) {
                      // Adicionamos um pequeno delay para garantir que a mensagem de abertura foi entregue antes da IA responder
                      await new Promise(r => setTimeout(r, 2000));
-                     await processAiAgentResponse(supabase, updatedContact, contact.wa_id, undefined, undefined, contact.user_id);
+                     await processAiAgentResponse(supabase, updatedContact, contact.wa_id, undefined, undefined, contact.user_id, (contact as any).whatsapp_number_id || null);
                  }
               }
             } else {
@@ -5914,7 +5981,7 @@ async function fetchAndStoreIncomingMedia(
              }).eq('id', contactId);
           } else {
              // Dispara a IA mesmo sem texto do cliente para que ela se apresente
-             await processAiAgentResponse(supabase, contactAfterExec, waId, params.text || "Inicie o atendimento se apresentando.", params.sourceMessageId, contactAfterExec.user_id || userId);
+             await processAiAgentResponse(supabase, contactAfterExec, waId, params.text || "Inicie o atendimento se apresentando.", params.sourceMessageId, contactAfterExec.user_id || userId, contactAfterExec.whatsapp_number_id || params.whatsapp_number_id || null);
           }
         }
 
@@ -6139,7 +6206,7 @@ async function fetchAndStoreIncomingMedia(
 
                 // Delay para parecer mais natural
                 await new Promise(resolve => setTimeout(resolve, 3000));
-                await processAiAgentResponse(supabase, updatedContact, waId, finalAiText, sourceMessageId, updatedContact.user_id);
+                await processAiAgentResponse(supabase, updatedContact, waId, finalAiText, sourceMessageId, updatedContact.user_id, updatedContact.whatsapp_number_id || null);
               }
             })();
           } else if (res?.message?.includes('AI handling state') && !text) {
@@ -6471,7 +6538,7 @@ async function fetchAndStoreIncomingMedia(
         
       if (!contact) return jsonResponse({ success: false, error: 'Contact not found' });
       
-       const result = await processAiAgentResponse(supabase, contact, params.to || params.waId, params.text, params.sourceMessageId, contact.user_id);
+       const result = await processAiAgentResponse(supabase, contact, params.to || params.waId, params.text, params.sourceMessageId, contact.user_id, contact.whatsapp_number_id || params.whatsapp_number_id || null);
       return jsonResponse(result);
     }
 
