@@ -1114,37 +1114,49 @@ async function handleProcessWebhook(supabase: any, entry: any, skipSave = false,
   const value = entry?.[0]?.changes?.[0]?.value || {};
   const webhookField = entry?.[0]?.changes?.[0]?.field;
 
+  // IMPORTANTE: estes dois identificadores são usados em todo o handler
+  // (resolução do dono e da caixa). Precisam viver no escopo da função —
+  // declarar dentro do `if (!userId)` causava ReferenceError no runtime.
+  const webhookPhoneNumberId: string | null = value?.metadata?.phone_number_id ?? null;
+  const webhookWabaId: string | null = entry?.[0]?.id ?? null;
 
-  if (!userId) {
-    const webhookPhoneNumberId = value?.metadata?.phone_number_id;
-    const webhookWabaId = entry?.[0]?.id;
-    if (webhookPhoneNumberId || webhookWabaId) {
-      const query = supabase
-        .from('crm_settings')
-        .select('user_id')
-        .order('updated_at', { ascending: false, nullsFirst: false })
-        .limit(1);
-      const { data: resolvedRows, error: resolveError } = webhookPhoneNumberId
-        ? await query.eq('meta_phone_number_id', webhookPhoneNumberId)
-        : await query.eq('meta_waba_id', webhookWabaId);
-      if (resolveError) console.warn('[WEBHOOK] Failed to resolve user inside handler', resolveError);
-      const resolved = Array.isArray(resolvedRows) ? resolvedRows[0] : null;
-      if (resolved?.user_id) userId = resolved.user_id;
-    }
-  }
-
-  if (!userId) {
-    console.warn('[WEBHOOK] Event received but no CRM user was resolved for this webhook payload', { hasMessages: !!value?.messages?.length, hasStatuses: !!value?.statuses?.length });
-    return jsonResponse({ success: true, ignored: 'missing_user' });
-  }
-
-  // Número (caixa) que recebeu esta mensagem. Cada número tem sua própria
-  // base de contatos/mensagens, então tudo abaixo é gravado com este escopo.
+  // Número (caixa) que recebeu esta mensagem. Resolvido ANTES do dono porque,
+  // para o 2º/3º número do cadastro, a credencial só existe em
+  // crm_whatsapp_numbers (crm_settings guarda apenas o número principal).
   const inboundNumberRow = await getWhatsAppNumberByPhoneId(
     supabase,
     webhookPhoneNumberId,
     webhookWabaId,
   );
+
+  if (!userId && inboundNumberRow?.user_id) {
+    userId = inboundNumberRow.user_id;
+  }
+
+  if (!userId && (webhookPhoneNumberId || webhookWabaId)) {
+    const query = supabase
+      .from('crm_settings')
+      .select('user_id')
+      .order('updated_at', { ascending: false, nullsFirst: false })
+      .limit(1);
+    const { data: resolvedRows, error: resolveError } = webhookPhoneNumberId
+      ? await query.eq('meta_phone_number_id', webhookPhoneNumberId)
+      : await query.eq('meta_waba_id', webhookWabaId);
+    if (resolveError) console.warn('[WEBHOOK] Failed to resolve user inside handler', resolveError);
+    const resolved = Array.isArray(resolvedRows) ? resolvedRows[0] : null;
+    if (resolved?.user_id) userId = resolved.user_id;
+  }
+
+  if (!userId) {
+    console.warn('[WEBHOOK] Event received but no CRM user was resolved for this webhook payload', {
+      phone_number_id: webhookPhoneNumberId,
+      waba_id: webhookWabaId,
+      hasMessages: !!value?.messages?.length,
+      hasStatuses: !!value?.statuses?.length,
+    });
+    return jsonResponse({ success: true, ignored: 'missing_user' });
+  }
+
   const inboundNumberId: string | null =
     inboundNumberRow?.user_id === userId ? inboundNumberRow.id : null;
   /** Restringe a consulta ao número da caixa quando ele é conhecido. */

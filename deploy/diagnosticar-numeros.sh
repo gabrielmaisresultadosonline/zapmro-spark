@@ -66,7 +66,7 @@ select
   n.is_active                                            as ativo,
   n.id                                                   as numero_id
 from public.crm_whatsapp_numbers n
-join public.crm_profiles p on p.id = n.user_id
+join auth.users p on p.id = n.user_id
 where $FILTRO_SQL
 order by p.email, n.created_at;
 "
@@ -88,7 +88,7 @@ select
   (select max(m.created_at) from public.crm_messages m
      where m.whatsapp_number_id = n.id)         as ultima_mensagem
 from public.crm_whatsapp_numbers n
-join public.crm_profiles p on p.id = n.user_id
+join auth.users p on p.id = n.user_id
 where $FILTRO_SQL
 order by p.email, mensagens desc;
 "
@@ -101,7 +101,7 @@ select
      where c.user_id = p.id and c.whatsapp_number_id is null) as contatos_orfaos,
   (select count(*) from public.crm_messages m
      where m.user_id = p.id and m.whatsapp_number_id is null)  as mensagens_orfas
-from public.crm_profiles p
+from auth.users p
 where $FILTRO_SQL;
 "
 
@@ -137,7 +137,7 @@ if ! command -v jq >/dev/null; then c_warn "  jq não instalado (sudo apt-get in
       select p.email, coalesce(n.label,''), coalesce(n.meta_phone_number_id,''),
              coalesce(n.meta_waba_id,''), coalesce(n.meta_access_token,'')
       from public.crm_whatsapp_numbers n
-      join public.crm_profiles p on p.id = n.user_id
+      join auth.users p on p.id = n.user_id
       where $FILTRO_SQL" 2>/dev/null)
 fi
 
