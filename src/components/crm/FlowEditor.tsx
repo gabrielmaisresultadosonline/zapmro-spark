@@ -22,6 +22,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { supabase } from "@/integrations/supabase/client";
+import { FlowMedia } from "./FlowMedia";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -165,7 +166,7 @@ const ImageNode = ({ data }: any) => (
     <CardContent className="p-2">
       {data.imageUrl ? (
         <div className="aspect-video w-full max-w-[140px] rounded bg-slate-100 flex items-center justify-center overflow-hidden mx-auto">
-          <img src={data.imageUrl} alt="Preview" className="w-full h-full object-cover" />
+          <FlowMedia kind="image" url={data.imageUrl} className="w-full h-full" />
         </div>
       ) : (
         <p className="text-[9px] text-muted-foreground truncate">{data.fileName || 'Nenhuma imagem'}</p>
@@ -1087,7 +1088,7 @@ const FlowEditorInner: React.FC<FlowEditorProps> = ({ flow, onSave, onClose }) =
                         />
                         {selectedNode.data.imageUrl && (
                           <div className="flex items-center gap-2">
-                            <img src={selectedNode.data.imageUrl as string} className="w-16 h-16 object-cover rounded border" alt="Preview" />
+                            <FlowMedia kind="image" url={selectedNode.data.imageUrl} className="w-16 h-16 rounded border" />
                             <Button
                               variant="ghost"
                               size="sm"
@@ -1143,7 +1144,7 @@ const FlowEditorInner: React.FC<FlowEditorProps> = ({ flow, onSave, onClose }) =
                         </div>
                         {selectedNode.data.imageUrl && (
                           <div className="flex items-center gap-2">
-                            <img src={selectedNode.data.imageUrl as string} className="w-16 h-16 object-cover rounded border" alt="Preview" />
+                            <FlowMedia kind="image" url={selectedNode.data.imageUrl} className="w-16 h-16 rounded border" />
                             <Button
                               variant="ghost"
                               size="sm"
@@ -1156,7 +1157,7 @@ const FlowEditorInner: React.FC<FlowEditorProps> = ({ flow, onSave, onClose }) =
                         )}
                         {selectedNode.data.videoUrl && (
                           <div className="flex items-center gap-2">
-                            <video src={selectedNode.data.videoUrl as string} className="w-24 h-16 object-cover rounded border" muted />
+                            <FlowMedia kind="video" url={selectedNode.data.videoUrl} className="w-24 h-16 rounded border" />
                             <Button
                               variant="ghost"
                               size="sm"
@@ -1692,7 +1693,7 @@ const FlowEditorInner: React.FC<FlowEditorProps> = ({ flow, onSave, onClose }) =
                             </div>
                             {selectedNode.data.imageUrl && (
                               <div className="aspect-video w-full rounded overflow-hidden border">
-                                <img src={selectedNode.data.imageUrl as string} className="w-full h-full object-cover" alt="Preview" />
+                                <FlowMedia kind="image" url={selectedNode.data.imageUrl} className="w-full h-full" />
                               </div>
                             )}
                           </div>
@@ -2004,7 +2005,14 @@ const FlowEditorInner: React.FC<FlowEditorProps> = ({ flow, onSave, onClose }) =
                       </div>
                     </div>
                     {card.mediaUrl && (
-                      <div className="text-[10px] text-emerald-700 truncate">✓ {card.fileName || card.mediaUrl}</div>
+                      <div className="flex items-center gap-2">
+                        <FlowMedia
+                          kind={card.mediaType === 'video' ? 'video' : 'image'}
+                          url={card.mediaUrl}
+                          className="w-16 h-12 rounded border"
+                        />
+                        <div className="text-[10px] text-emerald-700 truncate">✓ {card.fileName || card.mediaUrl}</div>
+                      </div>
                     )}
                     <div className="space-y-1">
                       <Label className="text-[11px]">Texto do card (opcional)</Label>

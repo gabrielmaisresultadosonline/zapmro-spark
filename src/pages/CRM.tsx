@@ -103,6 +103,7 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import TemplateBuilder from "@/components/whatsapp/TemplateBuilder";
 import FlowEditor from "@/components/crm/FlowEditor";
+import { FlowSaveOverlay } from "@/components/crm/FlowSaveOverlay";
 import { MediaPopup } from "@/components/MediaPopup";
 import { DocumentPopup } from "@/components/crm/DocumentPopup";
 
@@ -696,6 +697,7 @@ const CRM = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [isFlowEditorOpen, setIsFlowEditorOpen] = useState(false);
+  const [flowSaveOverlay, setFlowSaveOverlay] = useState<{ open: boolean; done: boolean }>({ open: false, done: false });
   const [editingFlow, setEditingFlow] = useState<any>(null);
   const [uploadType, setUploadType] = useState<'image' | 'video' | 'audio' | 'document' | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -4670,6 +4672,7 @@ const CRM = () => {
 
   const handleSaveFlow = async (flow: any) => {
     setSaving(true);
+    setFlowSaveOverlay({ open: true, done: false });
     try {
       const { id, ...flowData } = flow;
       
@@ -4704,14 +4707,23 @@ const CRM = () => {
       if (result.error) {
         throw result.error;
       }
-      
+
+      // Recarrega SOMENTE os fluxos (fetchData completo levava ~3s e o fluxo
+      // reaberto vinha desatualizado).
+      const { data: freshFlows } = await supabase
+        .from('crm_flows')
+        .select('*, crm_flow_steps(*)');
+      if (freshFlows) setFlows(freshFlows);
+
+      setFlowSaveOverlay({ open: true, done: true });
       toast({ title: "Fluxo salvo com sucesso!" });
       setIsFlowEditorOpen(false);
       setEditingFlow(null);
-      fetchData(false);
-
-
+      // Pequena pausa só para o estado "Fluxo salvo!" ser percebido.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      setFlowSaveOverlay({ open: false, done: false });
     } catch (err: any) {
+      setFlowSaveOverlay({ open: false, done: false });
       toast({ 
         title: "Erro ao salvar fluxo", 
         description: err.message || "Ocorreu um erro inesperado.", 
@@ -4721,6 +4733,7 @@ const CRM = () => {
       setSaving(false);
     }
   };
+
 
   const handleDuplicateFlow = async (flow: any) => {
     setSaving(true);
@@ -9839,6 +9852,7 @@ const CRM = () => {
           onClose={() => { setIsFlowEditorOpen(false); setEditingFlow(null); }} 
         />
       )}
+      <FlowSaveOverlay open={flowSaveOverlay.open} done={flowSaveOverlay.done} />
       {previewMedia && (
         <MediaPopup 
           url={previewMedia.url} 
