@@ -6945,7 +6945,9 @@ async function fetchAndStoreIncomingMedia(
       if (!prompt) throw new Error('Prompt is required');
 
       const { data: settings } = await supabase.from('crm_settings').select('openai_api_key').eq('user_id', userId).maybeSingle();
-      const apiKey = settings?.openai_api_key || Deno.env.get('OPENAI_API_KEY');
+      const apiKey =
+        String(settings?.openai_api_key || '').trim() ||
+        String(Deno.env.get('OPENAI_API_KEY') || '').trim();
 
       if (!apiKey) throw new Error('OpenAI API Key not configured');
 
@@ -6979,7 +6981,9 @@ async function fetchAndStoreIncomingMedia(
       if (!message || !String(message).trim()) throw new Error('Mensagem é obrigatória');
 
       const { data: settings } = await supabase.from('crm_settings').select('openai_api_key').eq('user_id', userId).maybeSingle();
-      const apiKey = settings?.openai_api_key || Deno.env.get('OPENAI_API_KEY');
+      const apiKey =
+        String(settings?.openai_api_key || '').trim() ||
+        String(Deno.env.get('OPENAI_API_KEY') || '').trim();
       if (!apiKey) throw new Error('Nenhum token vinculado ao Agente I.A. Salve seu token no Agente I.A para usar o conversor.');
 
       const systemPrompt = `# FUNÇÃO
