@@ -2493,6 +2493,11 @@ const CRM = () => {
          for (const col of ALLOWED_COLUMNS) {
            if (targetSettings[col] !== undefined) rest[col] = targetSettings[col];
          }
+          // A validação sempre usa a chave aparada; a persistência precisa usar
+          // exatamente o mesmo valor para não reintroduzir espaços/quebras.
+          if (typeof rest.openai_api_key === 'string') {
+            rest.openai_api_key = rest.openai_api_key.trim();
+          }
          // Normaliza FKs vazias para null (evita violar FK)
          if (rest.initial_flow_id === '') rest.initial_flow_id = null;
          if (rest.countdown_trigger_flow_id === '') rest.countdown_trigger_flow_id = null;
@@ -7880,6 +7885,12 @@ const CRM = () => {
                                 }}
                                 onBlur={(e) => {
                                   const value = e.target.value.trim();
+                                   if (value !== e.target.value) {
+                                     setMetaSettings((previous: any) => ({
+                                       ...previous,
+                                       openai_api_key: value,
+                                     }));
+                                   }
                                   if (value) void validateOpenAiKey(value, { silent: true });
                                 }}
                               />

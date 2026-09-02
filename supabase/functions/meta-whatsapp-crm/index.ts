@@ -2423,7 +2423,9 @@ async function processAiRecoveryForAllUsers(supabase: any, onlyUserId?: string |
   }
 
   for (const settings of settingsRows || []) {
-    const apiKey = settings.openai_api_key || Deno.env.get('OPENAI_API_KEY');
+    const apiKey =
+      String(settings.openai_api_key || '').trim() ||
+      String(Deno.env.get('OPENAI_API_KEY') || '').trim();
     if (!apiKey || !settings.meta_phone_number_id || !settings.meta_access_token) continue;
 
     summary.users += 1;
