@@ -588,7 +588,14 @@ async function _transcribeAudioForAi(apiKey: string, audioUrl: string) {
     return { success: false, error: 'meta_credentials_missing', whatsapp_number_id: boxId };
   }
 
-  const OPENAI_API_KEY = aiSettings?.openai_api_key || Deno.env.get('OPENAI_API_KEY');
+  // A chave salva pelo usuário é sempre prioritária e normalizada. Espaços ou
+  // quebras de linha colados no campo causavam 401 apenas no webhook.
+  const userOpenAiKey = String(aiSettings?.openai_api_key || '').trim();
+  const fallbackOpenAiKey = String(Deno.env.get('OPENAI_API_KEY') || '').trim();
+  const OPENAI_API_KEY = userOpenAiKey || fallbackOpenAiKey;
+  aiLog('openai_key_resolved', {
+    source: userOpenAiKey ? 'crm_settings' : fallbackOpenAiKey ? 'environment_fallback' : 'missing',
+  });
 
   if (!OPENAI_API_KEY) {
     aiLog('failed_missing_openai_key');
@@ -2416,7 +2423,9 @@ async function processAiRecoveryForAllUsers(supabase: any, onlyUserId?: string |
   }
 
   for (const settings of settingsRows || []) {
-    const apiKey = settings.openai_api_key || Deno.env.get('OPENAI_API_KEY');
+    const apiKey =
+      String(settings.openai_api_key || '').trim() ||
+      String(Deno.env.get('OPENAI_API_KEY') || '').trim();
     if (!apiKey || !settings.meta_phone_number_id || !settings.meta_access_token) continue;
 
     summary.users += 1;
@@ -6751,6 +6760,7 @@ async function fetchAndStoreIncomingMedia(
      */
     if (action === 'validateOpenAiKey') {
       const rawKey = String(params?.api_key ?? '').trim();
+      const shouldPersist = params?.persist === true;
 
       if (!rawKey) {
         return jsonResponse({
@@ -6837,11 +6847,74 @@ async function fetchAndStoreIncomingMedia(
         });
 
         if (probe.ok) {
+          let persisted = false;
+          let persistedAt: string | null = null;
+
+          if (shouldPersist) {
+            if (!userId) {
+              return jsonResponse({
+                success: false,
+                valid: false,
+                persisted: false,
+                code: 'unauthorized',
+                message: 'Sessão expirada. Entre novamente antes de salvar a chave.',
+              }, 401);
+            }
+
+            const now = new Date().toISOString();
+            const { data: savedSettings, error: saveError } = await supabase
+              .from('crm_settings')
+              .upsert({
+                user_id: userId,
+                openai_api_key: rawKey,
+                updated_at: now,
+              }, { onConflict: 'user_id' })
+              .select('openai_api_key, updated_at')
+              .maybeSingle();
+
+            if (saveError) {
+              console.error('[AI-KEY] Valid key could not be persisted', {
+                user_id: userId,
+                error: saveError.message,
+              });
+              return jsonResponse({
+                success: false,
+                valid: true,
+                persisted: false,
+                code: 'save_failed',
+                message: 'A API está correta, mas não foi possível salvar a chave no cadastro.',
+                provider_message: saveError.message,
+              }, 500);
+            }
+
+            persisted = String(savedSettings?.openai_api_key || '').trim() === rawKey;
+            persistedAt = savedSettings?.updated_at || now;
+            if (!persisted) {
+              console.error('[AI-KEY] Persistence verification failed', { user_id: userId });
+              return jsonResponse({
+                success: false,
+                valid: true,
+                persisted: false,
+                code: 'save_verification_failed',
+                message: 'A API está correta, mas a confirmação da gravação falhou. Tente salvar novamente.',
+              }, 500);
+            }
+
+            console.log('[AI-KEY] Valid OpenAI key persisted and verified', {
+              user_id: userId,
+              updated_at: persistedAt,
+            });
+          }
+
           return jsonResponse({
             success: true,
             valid: true,
+            persisted,
+            persisted_at: persistedAt,
             code: 'ok',
-            message: 'API correta — chave válida, com acesso ao gpt-4o-mini e com saldo disponível.',
+            message: shouldPersist
+              ? 'API correta — chave validada, salva e confirmada no cadastro.'
+              : 'API correta — chave válida, com acesso ao gpt-4o-mini e com saldo disponível.',
           });
         }
 
@@ -6872,7 +6945,9 @@ async function fetchAndStoreIncomingMedia(
       if (!prompt) throw new Error('Prompt is required');
 
       const { data: settings } = await supabase.from('crm_settings').select('openai_api_key').eq('user_id', userId).maybeSingle();
-      const apiKey = settings?.openai_api_key || Deno.env.get('OPENAI_API_KEY');
+      const apiKey =
+        String(settings?.openai_api_key || '').trim() ||
+        String(Deno.env.get('OPENAI_API_KEY') || '').trim();
 
       if (!apiKey) throw new Error('OpenAI API Key not configured');
 
@@ -6906,7 +6981,9 @@ async function fetchAndStoreIncomingMedia(
       if (!message || !String(message).trim()) throw new Error('Mensagem é obrigatória');
 
       const { data: settings } = await supabase.from('crm_settings').select('openai_api_key').eq('user_id', userId).maybeSingle();
-      const apiKey = settings?.openai_api_key || Deno.env.get('OPENAI_API_KEY');
+      const apiKey =
+        String(settings?.openai_api_key || '').trim() ||
+        String(Deno.env.get('OPENAI_API_KEY') || '').trim();
       if (!apiKey) throw new Error('Nenhum token vinculado ao Agente I.A. Salve seu token no Agente I.A para usar o conversor.');
 
       const systemPrompt = `# FUNÇÃO
