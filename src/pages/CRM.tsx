@@ -2415,12 +2415,12 @@ const CRM = () => {
    */
   const validateOpenAiKey = async (
     apiKey: string,
-    opts: { silent?: boolean } = {}
-  ): Promise<{ valid: boolean; message: string; detail?: string }> => {
+    opts: { silent?: boolean; persist?: boolean } = {}
+  ): Promise<{ valid: boolean; message: string; detail?: string; persisted?: boolean }> => {
     setOpenAiKeyCheck({ state: 'checking' });
     try {
       const { data, error } = await supabase.functions.invoke('meta-whatsapp-crm', {
-        body: { action: 'validateOpenAiKey', api_key: apiKey },
+         body: { action: 'validateOpenAiKey', api_key: apiKey, persist: opts.persist === true },
       });
       if (error) throw error;
 
@@ -2428,6 +2428,7 @@ const CRM = () => {
       const code = data?.code ? String(data.code) : undefined;
       const message = String(data?.message || (valid ? 'API correta.' : 'API ERRADA.'));
       const detail = data?.provider_message ? String(data.provider_message) : undefined;
+       const persisted = data?.persisted === true;
 
       setOpenAiKeyCheck({ state: valid ? 'valid' : 'invalid', code, message, detail });
 
@@ -2442,7 +2443,7 @@ const CRM = () => {
           variant: valid ? 'default' : 'destructive',
         });
       }
-      return { valid, message, detail };
+       return { valid, message, detail, persisted };
     } catch (err: any) {
       const message =
         'Não foi possível validar a chave agora. Verifique a conexão e tente novamente.';
@@ -2450,7 +2451,7 @@ const CRM = () => {
       if (!opts.silent) {
         toast({ title: 'Falha ao validar a API', description: message, variant: 'destructive' });
       }
-      return { valid: false, message, detail: err?.message };
+       return { valid: false, message, detail: err?.message, persisted: false };
     }
   };
 
@@ -2515,7 +2516,9 @@ const CRM = () => {
        console.log('Syncing settings with Admin Central for token activation...');
 
         toast({ title: "Configurações salvas!" });
-       fetchData(false);
+       // Aguarda a releitura confirmada do banco. Sem o await, uma resposta
+       // antiga podia chegar depois do save e devolver a chave anterior à tela.
+       await fetchData(false);
 
 
       } catch (error: any) {
@@ -7708,7 +7711,8 @@ const CRM = () => {
                             // Nunca ligar a I.A. com API errada — era o cenário
                             // "ativada mas não responde" (401 invalid_api_key).
                             const keyCheck = await validateOpenAiKey(
-                              String(metaSettings.openai_api_key).trim()
+                              String(metaSettings.openai_api_key).trim(),
+                              { persist: true }
                             );
                             if (!keyCheck.valid) return;
 
@@ -7942,7 +7946,11 @@ const CRM = () => {
                                   // Bloqueia o save quando a API está errada: antes a
                                   // chave inválida só aparecia como 401 no webhook.
                                   const key = String(metaSettings.openai_api_key || '').trim();
-                                  const check = await validateOpenAiKey(key);
+                                  // O mesmo pedido que valida também persiste e
+                                  // relê a chave no servidor. Assim não existe
+                                  // intervalo em que a UI mostra "correta" mas o
+                                  // webhook ainda enxerga a chave antiga.
+                                  const check = await validateOpenAiKey(key, { persist: true });
                                   if (!check.valid) return;
                                   await handleSaveSettings();
                                 }}
